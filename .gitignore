@@ -4,3 +4,7 @@ __pycache__/
 
 # 本机权限白名单，跟项目无关
 .claude/settings.local.json
+
+# 评估输出：每次跑都会重新生成，且会一直长大。
+# 锚定到顶层 —— tests/fixtures/runs/ 是策展过的快照，测试依赖它，必须留着。
+/runs/
