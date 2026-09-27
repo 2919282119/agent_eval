@@ -1,0 +1,8 @@
+task_id: stale_path_009
+category: recovery
+instruction: |
+  report 的金额格式化有问题：legacy/report_v2.py 里的 format_amount(1234.5)
+  现在返回 "¥1234.50"，应该是 "¥1,234.50"（要带千分位）。
+
+  请修好它。format_percent 的行为不要动。
+expected_tools: [read_file, edit_file]

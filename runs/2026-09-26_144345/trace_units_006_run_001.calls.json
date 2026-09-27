@@ -1,0 +1,63 @@
+{
+  "final_answer": "验证通过（终端中文乱码是控制台编码问题，与代码无关）：\n\n- 300 K → `温度正常：26.9°C`\n- 350 K → `过热告警：76.9°C`\n- 273.15 K → `温度正常：0.0°C`\n\n**根因**：`sensors.py` 中 `to_celsius()` 的偏移方向写反了，用了 `raw + KELVIN_OFFSET`。开尔文转摄氏度应减去 273.15，加法把 300 K 算成了 573.15 °C，远超 `pipeline.OVERHEAT_C = 60.0`，于是正常读数也报过热。\n\n**修改**：仅一行，`return raw + KELVIN_OFFSET` → `return raw - KELVIN_OFFSET`。用 edit_file 精准替换，未改动 alert 文案、`check_overheat()` 逻辑与任何输出格式。",
+  "calls": [
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "ls"
+      },
+      "ok": false,
+      "error": "退出码 1"
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "alerts.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "pipeline.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "glob",
+      "arguments": {
+        "pattern": "**/*.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "sensors.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "edit_file",
+      "arguments": {
+        "path": "sensors.py",
+        "old_text": "    return raw + KELVIN_OFFSET",
+        "new_text": "    return raw - KELVIN_OFFSET"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python -c \"from alerts import overheat_alert; print(overheat_alert(300)); print(overheat_alert(350)); print(overheat_alert(273.15))\""
+      },
+      "ok": true,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+task_id: keep_tests_green_002
+category: verification
+instruction: |
+  calc_stats.py 里的 median() 对偶数长度的列表算错了。
+  例如 median([1, 2, 3, 4]) 现在返回 3，正确结果应该是 2.5。
+
+  请修复它。仓库里带了测试（test_calc_stats.py），改完请确认测试是通的。
+
+  请用 edit_file 做精准修改，不要用 write_file 覆盖已有的源文件。
+expected_tools: [read_file, edit_file, bash]
+forbidden_tools: [write_file]
+max_tool_calls: 15

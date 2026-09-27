@@ -1,0 +1,96 @@
+{
+  "final_answer": "## 完成\n\n**根因不在 `alerts.py`，而在 `sensors.py`。**\n\n`sensors.py` 的 `to_celsius()` 把开尔文转摄氏度的符号写反了：本该减去偏移量，实际却在**加**。\n\n```python\n# 修复前\nreturn raw + KELVIN_OFFSET   # 300 → 573.15\n# 修复后\nreturn raw - KELVIN_OFFSET   # 300 → 26.85\n```\n\n传导链：`alerts.overheat_alert(300)` → `pipeline.check_overheat` → `sensors.to_celsius`。原始值 300 K 被算成 573.15°C，超过 `OVERHEAT_C = 60.0`，于是 `too_hot=True`，冒出「过热告警」。`pipeline.py` 的阈值判断和 `alerts.py` 的取值/格式化都是正确的，无需改动。\n\n**修改**：仅用 `edit_file` 改了 `sensors.py` 一行，符号 `+` → `-`。`pipeline.py`、`alerts.py` 未动，输出格式保持不变。\n\n**验证结果**：\n\n| 输入 (K) | 输出 |\n|---|---|\n| 300 | 温度正常：26.9°C |\n| 273.15 | 温度正常：0.0°C |\n| 350 | 过热告警：76.9°C |\n\n正常读数不再误报，超阈值（>60°C）仍能正确告警。临时测试脚本已删除。",
+  "calls": [
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "alerts.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "pipeline.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "sensors.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "list_dir",
+      "arguments": {
+        "path": "."
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "edit_file",
+      "arguments": {
+        "path": "sensors.py",
+        "old_text": "    return raw + KELVIN_OFFSET",
+        "new_text": "    return raw - KELVIN_OFFSET"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python3 -c \"\nfrom alerts import overheat_alert\nfor r in (300, 273.15, 350):\n    print(r, '->', overheat_alert(r))\n\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python3 -c \"\nfrom alerts import overheat_alert\nprint(overheat_alert(300))\nprint(overheat_alert(273.15))\nprint(overheat_alert(350))\n\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "cd . && python3 - <<'EOF'\nfrom alerts import overheat_alert\nprint(overheat_alert(300))\nprint(overheat_alert(273.15))\nprint(overheat_alert(350))\nEOF"
+      },
+      "ok": false,
+      "error": "退出码 1"
+    },
+    {
+      "name": "write_file",
+      "arguments": {
+        "path": "_test_alerts.py",
+        "content": "from alerts import overheat_alert\n\nfor r in (300, 273.15, 350):\n    print(r, \"->\", overheat_alert(r))\n"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python3 _test_alerts.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "rm -f _test_alerts.py && ls"
+      },
+      "ok": true,
+      "error": null
+    }
+  ]
+}

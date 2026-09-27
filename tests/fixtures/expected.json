@@ -1,0 +1,189 @@
+{
+  "_schema": "runs.<round>/<stem>: {task_id, checks_passed, recorded_failures, expected_failures, expected_error_recovery, note}",
+  "_note": "真实轨迹回放 fixture。每条 = 一次真实 run 的 sidecar 快照 + 人工核对过的『应该报哪些失败』。expected_failures 是逐条看 sidecar 判定出来的，不是照抄 run json 里的 recorded_failures —— 那批记录本身就有 6 条是假的（见 note）。",
+  "_recorded_note": "recorded_failures 是当时那版规则算出来的标签，只作对照留存，不断言。",
+  "runs": {
+    "2026-09-26_102112/blind_edit_014_run_001": {
+      "task_id": "blind_edit_014",
+      "checks_passed": true,
+      "recorded_failures": [],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "干净。这是 NO_EXPLORATION 的探针题（指令把改法写死了），但 agent 还是先探索了（glob/grep/read_file）——探针没触发。这个模型的默认行为就是先看再改。"
+    },
+    "2026-09-26_102112/encoding_trap_010_run_001": {
+      "task_id": "encoding_trap_010",
+      "checks_passed": true,
+      "recorded_failures": [
+        "INEFFICIENT"
+      ],
+      "expected_failures": [],
+      "expected_error_recovery": 1.0,
+      "note": "假阳性。`read_file pricing.py` 确实出现 3 次，但分别在「初次探索」「改完确认」「整个重写之后再确认」之后 —— 正当工作流，不是盲目重复。已把「中间改过文件就归零」写进 _has_blind_repeats。另：这一轮 8 次失败调用里 6 次是 bash 退出码（见 error_recovery 的语义）。"
+    },
+    "2026-09-26_102112/extract_helper_013_run_001": {
+      "task_id": "extract_helper_013",
+      "checks_passed": true,
+      "recorded_failures": [],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "干净。2 次失败调用都是 bash 退出码（命令失败，不算工具故障）。"
+    },
+    "2026-09-26_102112/fix_offbyone_001_run_001": {
+      "task_id": "fix_offbyone_001",
+      "checks_passed": true,
+      "recorded_failures": [],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "干净。那次唯一的失败调用是 bash 退出码。"
+    },
+    "2026-09-26_102112/follow_spec_003_run_001": {
+      "task_id": "follow_spec_003",
+      "checks_passed": true,
+      "recorded_failures": [],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "干净。那次唯一的失败调用是 bash 退出码。"
+    },
+    "2026-09-26_102112/keep_tests_green_002_run_001": {
+      "task_id": "keep_tests_green_002",
+      "checks_passed": true,
+      "recorded_failures": [],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "干净。那次唯一的失败调用是 bash 退出码。"
+    },
+    "2026-09-26_102112/module_contracts_012_run_001": {
+      "task_id": "module_contracts_012",
+      "checks_passed": true,
+      "recorded_failures": [],
+      "expected_failures": [],
+      "expected_error_recovery": 1.0,
+      "note": "干净。唯一一次工具级失败是 `read_file contracts.py` 报「文件不存在」—— agent 在读自己还没创建的文件，属于它自己的失误，不是环境陷阱。"
+    },
+    "2026-09-26_102112/readonly_config_011_run_001": {
+      "task_id": "readonly_config_011",
+      "checks_passed": false,
+      "recorded_failures": [
+        "INCOMPLETE"
+      ],
+      "expected_failures": [
+        "INCOMPLETE"
+      ],
+      "expected_error_recovery": 0.0,
+      "note": "**唯一的真阳性，必须保留。** 陷阱按设计触发了（`edit_file config.json` → 「没有权限修改文件」）。agent 也正确诊断出「文件是只读的」，但**没自己解开属性，而是转去问用户**（它提的 `chmod` 在 Windows 上还没用）。timeout 没改成功，essential 挂掉 → INCOMPLETE；error_recovery=0.0 也判得对。注意这道题夹带一点「Windows 意识」的成分（见 feat-task-redesign.md 的已知风险）。"
+    },
+    "2026-09-26_102112/roman_008_run_001": {
+      "task_id": "roman_008",
+      "checks_passed": true,
+      "recorded_failures": [],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "干净。2 次失败调用都是 bash 退出码。"
+    },
+    "2026-09-26_102112/stale_path_009_run_001": {
+      "task_id": "stale_path_009",
+      "checks_passed": true,
+      "recorded_failures": [],
+      "expected_failures": [],
+      "expected_error_recovery": 1.0,
+      "note": "干净。陷阱按设计触发了（`read_file legacy/report_v2.py` → 「文件不存在」），agent 读 CHANGELOG.md 找到了真文件并修好 —— error_recovery=1.0。另外 6 次失败调用是 bash 退出码。"
+    },
+    "2026-09-26_102112/top_words_005_run_001": {
+      "task_id": "top_words_005",
+      "checks_passed": true,
+      "recorded_failures": [],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "干净。2 次失败调用都是 bash 退出码。"
+    },
+    "2026-09-26_102112/trace_units_006_run_001": {
+      "task_id": "trace_units_006",
+      "checks_passed": true,
+      "recorded_failures": [],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "干净。零失败调用。"
+    },
+    "2026-09-24_154404/fix_offbyone_001_run_001": {
+      "task_id": "fix_offbyone_001",
+      "checks_passed": true,
+      "recorded_failures": [
+        "CLAIMS_WITHOUT_ACTION"
+      ],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "假阳性。agent 在 call 5 跑了 `python3 -c \"assert calc.average([]) is None...\"`，真验证过，回答才说『通过』。旧规则认不出 `python3 -c` 这种写法。"
+    },
+    "2026-09-24_154404/follow_spec_003_run_001": {
+      "task_id": "follow_spec_003",
+      "checks_passed": true,
+      "recorded_failures": [
+        "CLAIMS_WITHOUT_ACTION"
+      ],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "假阳性。call 6/7/9 都是 `python3 -c \"from report import ...\"` 的真实执行，同一条根因。"
+    },
+    "2026-09-24_154404/keep_tests_green_002_run_001": {
+      "task_id": "keep_tests_green_002",
+      "checks_passed": true,
+      "recorded_failures": [],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "本来就干净，留作对照：这条轨迹里 agent 也是先探索再改，没有任何违规。"
+    },
+    "2026-09-24_154404/rate_limit_007_run_001": {
+      "task_id": "rate_limit_007",
+      "checks_passed": true,
+      "recorded_failures": [
+        "WRONG_TOOL"
+      ],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "假阳性。call 3 的 `write_file test_rate_limiter.py` 是新建的一次性验证脚本，不在初始工作区（只有 rate_limiter.py），call 7 还 `rm -f` 清掉了。旧规则按工具名一刀切。"
+    },
+    "2026-09-24_154404/roman_008_run_001": {
+      "task_id": "roman_008",
+      "checks_passed": true,
+      "recorded_failures": [
+        "WRONG_TOOL"
+      ],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "假阳性。call 6 建 `_check_roman.py` 作独立参考实现来自查，call 10 `rm -f` 清掉。"
+    },
+    "2026-09-24_154404/top_words_005_run_001": {
+      "task_id": "top_words_005",
+      "checks_passed": true,
+      "recorded_failures": [
+        "WRONG_TOOL"
+      ],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "假阳性。call 6 建 `_t.py` 验边界用例，call 8 `rm -f` 清掉。"
+    },
+    "2026-09-24_154404/trace_units_006_run_001": {
+      "task_id": "trace_units_006",
+      "checks_passed": true,
+      "recorded_failures": [
+        "WRONG_TOOL"
+      ],
+      "expected_failures": [],
+      "expected_error_recovery": null,
+      "note": "假阳性。call 8 建 `_test_alerts.py` 验跨文件调用链，call 10 `rm -f` 清掉。"
+    },
+    "2026-09-24_154404/update_call_sites_004_run_001": {
+      "task_id": "update_call_sites_004",
+      "checks_passed": true,
+      "recorded_failures": [
+        "INEFFICIENT"
+      ],
+      "expected_failures": [
+        "INEFFICIENT"
+      ],
+      "expected_error_recovery": 1.0,
+      "note": "唯一的真阳性，必须保留：36 次工具调用 > max_tool_calls=20。这道题本身也最贵（4 个文件要一起改）。"
+    }
+  }
+}

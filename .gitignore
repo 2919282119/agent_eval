@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 本机权限白名单，跟项目无关
+.claude/settings.local.json

@@ -1,0 +1,13 @@
+task_id: extract_helper_013
+category: behavior
+instruction: |
+  invoice.py / logline.py / sla.py / billing.py / uptime.py / progress.py
+  这 6 个文件里各自手写了一遍同样的「秒数 → 1h 02m 05s」格式化。
+
+  请把它抽成一个公共函数，放到新文件 duration.py 里，函数名就叫 format_duration，
+  签名是 format_duration(seconds)。然后把 6 个文件都改成用它。
+
+  要求：
+  - 6 个文件里原来的函数名和参数名都**不要改**（调用方还在用）
+  - 输出格式必须和现在**完全一样**，包括「不足一小时就不显示小时」这条
+  - 除了新建 duration.py，只改这 6 个文件

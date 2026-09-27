@@ -1,0 +1,167 @@
+{
+  "final_answer": "完成。\n\n**做法**：没有手抄，而是用 `ast` 解析 5 个模块的源码，只取顶层 `FunctionDef`（自动排除 `_STORE`/`_TTL` 等变量），按 `posonlyargs + args + kwonlyargs` 的**定义顺序**收集参数名。临时生成脚本已删除。\n\n**新建文件 `contracts.py`**：\n\n```python\nCONTRACTS = {\n    \"mod_cache\": {\n        \"get\": ['key', 'default'],\n        \"put\": ['key', 'value', 'ttl'],\n        \"clear\": [],\n    },\n    \"mod_core\": {\n        \"compute\": ['a', 'b', 'scale'],\n        \"reset\": [],\n    },\n    \"mod_io\": {\n        \"read_rows\": ['path', 'encoding'],\n        \"write_rows\": ['path', 'rows', 'overwrite'],\n    },\n    \"mod_math\": {\n        \"clamp\": ['value', 'low', 'high'],\n        \"average\": ['values'],\n    },\n    \"mod_text\": {\n        \"normalize\": ['text', 'lower', 'strip'],\n        \"truncate\": ['text', 'limit', 'suffix'],\n        \"word_count\": ['text'],\n    },\n}\n```\n\n**验证**：用 `inspect.signature` 逐个模块比对，所有函数的参数名与顺序**全部一致**（`all match: True`），模块键名不带 `.py`。\n\n**改动范围**：只新增了 `contracts.py`，其余模块文件未作任何修改（临时辅助文件已清理）。",
+  "calls": [
+    {
+      "name": "list_dir",
+      "arguments": {
+        "path": "."
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "ls -la"
+      },
+      "ok": false,
+      "error": "退出码 1"
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "mod_cache.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "mod_core.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "mod_io.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "mod_math.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "mod_text.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "cd /d . 2>nul & python -c \"import ast,sys; [print(f) for f in ['mod_cache.py','mod_core.py','mod_io.py','mod_math.py','mod_text.py']]\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python - <<'EOF'\nimport ast\n\nmods = [\"mod_cache\", \"mod_core\", \"mod_io\", \"mod_math\", \"mod_text\"]\nprint(\"CONTRACTS = {\")\nfor m in mods:\n    tree = ast.parse(open(m + \".py\", encoding=\"utf-8\").read())\n    print(f'    \"{m}\": {{')\n    for node in tree.body:\n        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):\n            args = [a.arg for a in node.args.posonlyargs + node.args.args + node.args.kwonlyargs]\n            print(f'        \"{node.name}\": {args!r},')\n    print(\"    },\")\nprint(\"}\")\nEOF"
+      },
+      "ok": false,
+      "error": "退出码 1"
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python -c \"\nimport ast\nmods = ['mod_cache', 'mod_core', 'mod_io', 'mod_math', 'mod_text']\nprint('CONTRACTS = {')\nfor m in mods:\n    tree = ast.parse(open(m + '.py', encoding='utf-8').read())\n    print('    ' + repr(m) + ': {')\n    for node in tree.body:\n        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):\n            args = [a.arg for a in node.args.posonlyargs + node.args.args + node.args.kwonlyargs]\n            print('        ' + repr(node.name) + ': ' + repr(args) + ',')\n    print('    },')\nprint('}')\n\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python -c \"import ast;print(ast.dump(ast.parse('x=1')))\"; echo \"---\"; python -c \"print('hello')\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "write_file",
+      "arguments": {
+        "path": "_gen_contracts.py",
+        "content": "import ast\n\nmods = [\"mod_cache\", \"mod_core\", \"mod_io\", \"mod_math\", \"mod_text\"]\nlines = [\"CONTRACTS = {\"]\nfor m in mods:\n    tree = ast.parse(open(m + \".py\", encoding=\"utf-8\").read())\n    lines.append('    \"%s\": {' % m)\n    for node in tree.body:\n        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):\n            args = [a.arg for a in node.args.posonlyargs + node.args.args + node.args.kwonlyargs]\n            lines.append('        \"%s\": %r,' % (node.name, args))\n    lines.append(\"    },\")\nlines.append(\"}\")\n\nwith open(\"contracts.py\", \"w\", encoding=\"utf-8\") as f:\n    f.write(\"\\n\".join(lines) + \"\\n\")\nprint(\"written\")\n"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python _gen_contracts.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "contracts.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "del _gen_contracts.py && python -c \"from contracts import CONTRACTS as C; import inspect, importlib; print(sorted(C)); ok=True\nfor m, fns in C.items():\n    mod = importlib.import_module(m)\n    for fn, args in fns.items():\n        real = [p.name for p in inspect.signature(getattr(mod, fn)).parameters.values()]\n        if real != args:\n            ok=False; print('MISMATCH', m, fn, args, real)\nprint('all match:', ok)\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python -c \"\nfrom contracts import CONTRACTS as C\nimport inspect, importlib\nok = True\nfor m, fns in C.items():\n    mod = importlib.import_module(m)\n    for fn, args in fns.items():\n        real = [p.name for p in inspect.signature(getattr(mod, fn)).parameters.values()]\n        if real != args:\n            ok = False\n            print('MISMATCH', m, fn, args, real)\nprint('modules:', sorted(C))\nprint('all match:', ok)\n\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "write_file",
+      "arguments": {
+        "content": "from contracts import CONTRACTS as C\nimport inspect, importlib\n\nok = True\nfor m, fns in C.items():\n    mod = importlib.import_module(m)\n    for fn, args in fns.items():\n        real = [p.name for p in inspect.signature(getattr(mod, fn)).parameters.values()]\n        if real != args:\n            ok = False\n            print(\"MISMATCH\", m, fn, args, real)\n\nwith open(\"_check_out.txt\", \"w\", encoding=\"utf-8\") as f:\n    f.write(\"modules: %s\\n\" % sorted(C))\n    f.write(\"all match: %s\\n\" % ok)\n",
+        "path": "_check.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python _check.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "_check_out.txt"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "del _check.py _check_out.txt && dir /b"
+      },
+      "ok": true,
+      "error": null
+    }
+  ]
+}

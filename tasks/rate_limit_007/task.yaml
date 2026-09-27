@@ -1,0 +1,17 @@
+task_id: rate_limit_007
+category: correctness
+instruction: |
+  rate_limiter.py 的 RateLimiter 是滑动窗口限流器：任意 window 秒内最多放行 limit 次。
+
+  现在它跑久了会把后续所有请求都拒掉 —— 窗口滑过去之后，旧的记录应该失效。
+  请修复 allow()，让窗口真正滑动起来。
+
+  limit 和 window 两个属性、以及 allow(timestamp) 的签名都不要改。
+
+  请用 edit_file 做精准修改，不要用 write_file 覆盖已有的源文件。
+expected_tools: [read_file, edit_file]
+forbidden_tools: [write_file]
+max_tool_calls: 15
+# 退役：这道题单次要 370 秒上下，为了控制一轮总时长不跑它。
+# 目录必须留着 —— tests/fixtures 的真实轨迹回放测试要读它的配置。
+retired: true

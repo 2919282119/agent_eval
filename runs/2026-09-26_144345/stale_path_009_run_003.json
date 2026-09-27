@@ -1,0 +1,36 @@
+{
+  "task_id": "stale_path_009",
+  "run_id": "run_003",
+  "agent_version": "a10dd34",
+  "model": "deepseek",
+  "model_actual": "deepseek-flash",
+  "first_action": "explore",
+  "tools_used": [
+    "bash",
+    "edit_file",
+    "glob",
+    "list_dir",
+    "read_file",
+    "write_file"
+  ],
+  "max_usage_ratio": 0.0053,
+  "compactions": 0,
+  "status": "success",
+  "error": null,
+  "trajectory": {
+    "steps": 36,
+    "tool_calls": 19,
+    "llm_calls": 17,
+    "tokens": 63337,
+    "latency_ms": 62452
+  },
+  "evaluation": {
+    "task_success": true,
+    "correctness": 1.0,
+    "completeness": 1.0,
+    "tool_usage": 1.0,
+    "groundedness": null,
+    "error_recovery": 1.0
+  },
+  "failures": []
+}

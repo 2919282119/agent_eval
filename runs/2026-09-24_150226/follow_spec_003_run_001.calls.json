@@ -1,0 +1,108 @@
+[
+  {
+    "name": "glob",
+    "arguments": {
+      "pattern": "**/report.py"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "glob",
+    "arguments": {
+      "pattern": "**/SPEC.md"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "arguments": {
+      "path": "SPEC.md"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "arguments": {
+      "path": "report.py"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "grep",
+    "arguments": {
+      "pattern": "format_amount|format_percent"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "glob",
+    "arguments": {
+      "pattern": "**/*test*"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "write_file",
+    "arguments": {
+      "path": "report.py",
+      "content": "def format_amount(value):\n    \"\"\"把金额格式化成面向用户显示的字符串。\"\"\"\n    return f\"¥{value:,.2f}\"\n\n\ndef format_percent(ratio):\n    \"\"\"把 0~1 的比例格式化成面向用户显示的字符串。\"\"\"\n    return f\"{ratio * 100:.1f}%\"\n"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "bash",
+    "arguments": {
+      "command": "cd \"$(dirname \"$(find . -name report.py -maxdepth 2 | head -1)\")\" 2>/dev/null; python3 -c \"\nfrom report import format_amount, format_percent\nprint(format_amount(1234.5), '|', format_amount(0), '|', format_amount(1234567.891))\nprint(format_percent(0.125), '|', format_percent(1), '|', format_percent(0))\n\""
+    },
+    "ok": false,
+    "error": "退出码 255"
+  },
+  {
+    "name": "bash",
+    "arguments": {
+      "command": "python3 -c \"\nimport sys; sys.path.insert(0, '.')\nfrom report import format_amount, format_percent\nprint(format_amount(1234.5), '|', format_amount(0), '|', format_amount(1234567.891))\nprint(format_percent(0.125), '|', format_percent(1), '|', format_percent(0))\n\""
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "bash",
+    "arguments": {
+      "command": "cat > /tmp/_check.py <<'EOF'\nimport sys\nsys.path.insert(0, '.')\nfrom report import format_amount, format_percent\nprint(\"amount:\", format_amount(1234.5), \"|\", format_amount(0), \"|\", format_amount(1234567.891))\nprint(\"percent:\", format_percent(0.125), \"|\", format_percent(1), \"|\", format_percent(0))\nEOF\ncd \"$(pwd)\" && python3 /tmp/_check.py; echo \"exit=$?\""
+    },
+    "ok": false,
+    "error": "退出码 1"
+  },
+  {
+    "name": "write_file",
+    "arguments": {
+      "path": "/tmp/_check.py",
+      "content": "import sys\nsys.path.insert(0, '.')\nfrom report import format_amount, format_percent\n\nprint(\"amount:\", format_amount(1234.5), \"|\", format_amount(0), \"|\", format_amount(1234567.891))\nprint(\"percent:\", format_percent(0.125), \"|\", format_percent(1), \"|\", format_percent(0))\n"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "bash",
+    "arguments": {
+      "command": "python3 /tmp/_check.py"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "bash",
+    "arguments": {
+      "command": "rm -f /tmp/_check.py && echo done"
+    },
+    "ok": true,
+    "error": null
+  }
+]

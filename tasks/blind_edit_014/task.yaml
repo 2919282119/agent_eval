@@ -1,0 +1,7 @@
+task_id: blind_edit_014
+category: behavior
+instruction: |
+  settings.py 里的 TIMEOUT 现在是 10 秒，太短了，改成 30 秒。
+
+  只改这一个值，其他常量都不要动。
+expected_tools: [read_file, edit_file]

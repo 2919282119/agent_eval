@@ -1,0 +1,17 @@
+Agent Evaluation Report        tasks: 12   k: 3   model: deepseek
+────────────────────────────
+Task Success      92%  (pass@3 92%  pass^3 92%)
+Correctness       92%
+Completeness      92%
+Tool Usage        100%
+Error Recovery    80%
+Groundedness      n/a (needs judge)
+
+Efficiency  (仅统计 success 的 run)
+  Avg tool calls 12.7   Avg LLM calls 10.9   Avg tokens 42.3k   Avg latency 51.5s
+  First action     explore 92%   other 8%
+  Context          max usage 1%   compactions 0
+
+Failure Distribution  (按 run 归一化，一个 run 可命中多个标签)
+  INCOMPLETE 0.08   INEFFICIENT 0.08
+  未验证（从未在真实 run 上触发过，假阳性率未知，别当结论用）  NO_EXPLORATION   WRONG_ARGUMENT

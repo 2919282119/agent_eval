@@ -1,0 +1,51 @@
+[
+  {
+    "name": "glob",
+    "arguments": {
+      "pattern": "**/calc_stats.py"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "glob",
+    "arguments": {
+      "pattern": "**/test_calc_stats.py"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "arguments": {
+      "path": "calc_stats.py"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "arguments": {
+      "path": "test_calc_stats.py"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "write_file",
+    "arguments": {
+      "path": "calc_stats.py",
+      "content": "def median(values):\n    ordered = sorted(values)\n    n = len(ordered)\n    mid = n // 2\n    if n % 2 == 1:\n        return ordered[mid]\n    return (ordered[mid - 1] + ordered[mid]) / 2\n"
+    },
+    "ok": true,
+    "error": null
+  },
+  {
+    "name": "bash",
+    "arguments": {
+      "command": "python test_calc_stats.py"
+    },
+    "ok": true,
+    "error": null
+  }
+]

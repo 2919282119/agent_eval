@@ -1,0 +1,26 @@
+{
+  "task_id": "fix_offbyone_001",
+  "run_id": "run_001",
+  "agent_version": "a10dd34",
+  "model": "deepseek",
+  "model_actual": "deepseek-flash",
+  "first_action": "explore",
+  "status": "success",
+  "error": null,
+  "trajectory": {
+    "steps": 19,
+    "tool_calls": 9,
+    "llm_calls": 10,
+    "tokens": 32063,
+    "latency_ms": 94457
+  },
+  "evaluation": {
+    "task_success": true,
+    "correctness": 1.0,
+    "completeness": 1.0,
+    "tool_usage": 1.0,
+    "groundedness": null,
+    "error_recovery": 1.0
+  },
+  "failures": []
+}

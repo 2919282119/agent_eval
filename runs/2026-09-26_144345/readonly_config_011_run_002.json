@@ -1,0 +1,36 @@
+{
+  "task_id": "readonly_config_011",
+  "run_id": "run_002",
+  "agent_version": "a10dd34",
+  "model": "deepseek",
+  "model_actual": "deepseek-flash",
+  "first_action": "explore",
+  "tools_used": [
+    "bash",
+    "edit_file",
+    "glob",
+    "read_file"
+  ],
+  "max_usage_ratio": 0.0029,
+  "compactions": 0,
+  "status": "failed",
+  "error": null,
+  "trajectory": {
+    "steps": 13,
+    "tool_calls": 6,
+    "llm_calls": 7,
+    "tokens": 18880,
+    "latency_ms": 14257
+  },
+  "evaluation": {
+    "task_success": false,
+    "correctness": 0.0,
+    "completeness": 0.0,
+    "tool_usage": 1.0,
+    "groundedness": null,
+    "error_recovery": 0.5
+  },
+  "failures": [
+    "INCOMPLETE"
+  ]
+}

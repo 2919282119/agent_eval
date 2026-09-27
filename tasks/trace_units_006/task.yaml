@@ -1,0 +1,14 @@
+task_id: trace_units_006
+category: debugging
+instruction: |
+  alerts.py 的 overheat_alert() 对正常读数也报过热。
+
+  传感器上报的原始值是开尔文，300 应该对应 27 摄氏度左右、属于正常范围，
+  但现在会报「过热告警」。
+
+  请定位根因并修复。pipeline.py 和 alerts.py 的输出格式不要改。
+
+  请用 edit_file 做精准修改，不要用 write_file 覆盖已有的源文件。
+expected_tools: [read_file, grep, edit_file]
+forbidden_tools: [write_file]
+max_tool_calls: 20

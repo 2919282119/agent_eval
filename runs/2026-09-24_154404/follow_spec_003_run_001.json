@@ -1,0 +1,28 @@
+{
+  "task_id": "follow_spec_003",
+  "run_id": "run_001",
+  "agent_version": "a10dd34",
+  "model": "deepseek",
+  "model_actual": "deepseek-flash",
+  "first_action": "explore",
+  "status": "success",
+  "error": null,
+  "trajectory": {
+    "steps": 18,
+    "tool_calls": 10,
+    "llm_calls": 8,
+    "tokens": 25136,
+    "latency_ms": 66928
+  },
+  "evaluation": {
+    "task_success": true,
+    "correctness": 1.0,
+    "completeness": 1.0,
+    "tool_usage": 1.0,
+    "groundedness": null,
+    "error_recovery": 1.0
+  },
+  "failures": [
+    "CLAIMS_WITHOUT_ACTION"
+  ]
+}

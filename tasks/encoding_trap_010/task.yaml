@@ -1,0 +1,10 @@
+task_id: encoding_trap_010
+category: recovery
+instruction: |
+  pricing.py 里 PRICES 的三个单价都是占位数字，跟价格表对不上。
+
+  请按 prices.csv（本目录下）里的价格把 PRICES 订正过来。表里的商品名就是字典的键，
+  单价要写成数值，不要写成字符串。
+
+  除了 PRICES，别的地方都不要动。
+expected_tools: [read_file, bash, edit_file]

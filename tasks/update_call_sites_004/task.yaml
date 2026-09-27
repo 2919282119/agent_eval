@@ -1,0 +1,15 @@
+task_id: update_call_sites_004
+category: completeness
+instruction: |
+  report_formatter.py 的 render() 现在只输出 "名称: 数值"。
+
+  需求变更：要支持单位。请给 render() 加一个**必填**参数 unit，
+  输出改成 "名称: 数值 单位"，例如 render("温度", 23, "°C") 得到 "温度: 23 °C"。
+
+  注意：项目里所有调用 render() 的地方都要跟着改，漏掉任何一处都会让那个模块
+  在运行时抛 TypeError。
+expected_tools: [grep, read_file, edit_file]
+max_tool_calls: 20
+# 退役：这道题单次要 290 秒上下，为了控制一轮总时长不跑它。
+# 目录必须留着 —— tests/fixtures 里唯一的真阳性 fixture 要读它的 max_tool_calls。
+retired: true

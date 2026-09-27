@@ -1,0 +1,14 @@
+task_id: roman_008
+category: correctness
+instruction: |
+  roman.py 的 to_roman() 对某些数字会输出不合法的罗马数字 —— 比如 4 输出 "IIII"，
+  正确写法应该是 "IV"。
+
+  请修正，让 1~3999 的每一个取值都输出标准罗马数字（包括减法记法）。
+
+  范围校验和它抛的异常保持原样。
+
+  请用 edit_file 做精准修改，不要用 write_file 覆盖已有的源文件。
+expected_tools: [read_file, edit_file]
+forbidden_tools: [write_file]
+max_tool_calls: 15

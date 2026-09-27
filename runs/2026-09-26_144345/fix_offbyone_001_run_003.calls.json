@@ -1,0 +1,71 @@
+{
+  "final_answer": "Verified. The fix works as required.\n\n**What I changed** (single `edit_file` on `calc.py`):\n\n```python\ndef average(numbers):\n    if not numbers:\n        return None\n    total = 0\n    for n in numbers:\n        total += n\n    return total / len(numbers)\n```\n\n**Verification results** (run via importing the module):\n- `average([])` → `None` (no more ZeroDivisionError) ✅\n- `average([1,2,3,4])` → `2.5` (unchanged) ✅\n- `average([5])` → `5.0` (unchanged) ✅\n- `average([1.5,2.5])` → `2.0` (unchanged) ✅\n\n**Constraints respected:**\n- `add_all()` left untouched.\n- No new files created in the source tree (only a temporary `/tmp` file used for verification output).\n- Used `edit_file` for the precise change, not `write_file`.\n\nNote: I only added an early-return guard, so the computation path for non-empty lists is byte-for-byte identical to the original — results can't change.",
+  "calls": [
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "calc.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "edit_file",
+      "arguments": {
+        "path": "calc.py",
+        "old_text": "def average(numbers):\n    total = 0\n    for n in numbers:\n        total += n\n    return total / len(numbers)",
+        "new_text": "def average(numbers):\n    if not numbers:\n        return None\n    total = 0\n    for n in numbers:\n        total += n\n    return total / len(numbers)"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "calc.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python -c \"\nfrom calc import average, add_all\nprint('empty:', average([]))\nprint('normal:', average([1,2,3,4]))\nprint('single:', average([5]))\nprint('floats:', average([1.5, 2.5]))\nprint('add_all:', add_all([1,2,3]))\nprint('add_all empty:', add_all([]))\n\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "cd . && python3 - <<'EOF' 2>&1\nfrom calc import average, add_all\nprint(\"empty:\", average([]))\nprint(\"normal:\", average([1,2,3,4]))\nprint(\"single:\", average([5]))\nprint(\"floats:\", average([1.5, 2.5]))\nprint(\"add_all:\", add_all([1,2,3]))\nEOF"
+      },
+      "ok": false,
+      "error": "退出码 1"
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python -c \"import calc; print(repr(calc.average([])), repr(calc.average([1,2,3,4])), repr(calc.average([5])), repr(calc.add_all([1,2,3])))\" > /tmp/out.txt 2>&1; cat /tmp/out.txt"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python -c \"import calc; open('/tmp/res.txt','w').write('%r %r %r %r' % (calc.average([]), calc.average([1,2,3,4]), calc.average([5]), calc.average([1.5,2.5])))\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "/tmp/res.txt"
+      },
+      "ok": true,
+      "error": null
+    }
+  ]
+}

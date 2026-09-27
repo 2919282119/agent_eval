@@ -1,0 +1,55 @@
+{
+  "final_answer": "修复完成。\n\n**修改内容**（`calc.py`，仅动 `average()`）：\n```python\ndef average(numbers):\n    if not numbers:\n        return None\n    total = 0\n    for n in numbers:\n        total += n\n    return total / len(numbers)\n```\n\n- 在计算前加了一个空序列守卫，空列表/空元组等 falsy 序列直接返回 `None`，不再触发 `ZeroDivisionError`。\n- 非空路径的计算逻辑逐行未变（迭代求和 + `total / len(numbers)`）。\n\n**验证结果**（实际运行）：\n- `average([])` → `None`\n- `average([1,2,3])` → `2.0`（与原实现一致）\n- `add_all([1,2,3])` → `6`、`add_all([])` → `0`（未改动，行为不变）\n\n约束遵守情况：使用 `edit_file` 做精准替换，未覆盖整个文件；未改动 `add_all()`；未新增文件。",
+  "calls": [
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "calc.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "edit_file",
+      "arguments": {
+        "path": "calc.py",
+        "old_text": "def average(numbers):\n    total = 0\n    for n in numbers:\n        total += n\n    return total / len(numbers)",
+        "new_text": "def average(numbers):\n    if not numbers:\n        return None\n    total = 0\n    for n in numbers:\n        total += n\n    return total / len(numbers)"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "cd . && python -c \"\nimport calc\nprint(calc.average([]))\nprint(calc.average([1,2,3]))\nprint(calc.add_all([1,2,3]))\nprint(calc.add_all([]))\n\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "ls && python3 -c \"\nimport calc\nprint(repr(calc.average([])))\nprint(calc.average([1,2,3]))\nprint(calc.add_all([1,2,3]))\nprint(calc.add_all([]))\n\""
+      },
+      "ok": false,
+      "error": "退出码 1"
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python -c \"import calc; print(repr(calc.average([]))); print(calc.average([1,2,3])); print(calc.add_all([1,2,3])); print(calc.add_all([]))\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "calc.py"
+      },
+      "ok": true,
+      "error": null
+    }
+  ]
+}

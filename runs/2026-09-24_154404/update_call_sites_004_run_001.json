@@ -1,0 +1,28 @@
+{
+  "task_id": "update_call_sites_004",
+  "run_id": "run_001",
+  "agent_version": "a10dd34",
+  "model": "deepseek",
+  "model_actual": "deepseek-flash",
+  "first_action": "explore",
+  "status": "success",
+  "error": null,
+  "trajectory": {
+    "steps": 64,
+    "tool_calls": 36,
+    "llm_calls": 28,
+    "tokens": 164346,
+    "latency_ms": 244158
+  },
+  "evaluation": {
+    "task_success": true,
+    "correctness": 1.0,
+    "completeness": 1.0,
+    "tool_usage": 1.0,
+    "groundedness": null,
+    "error_recovery": 1.0
+  },
+  "failures": [
+    "INEFFICIENT"
+  ]
+}

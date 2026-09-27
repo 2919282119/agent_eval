@@ -1,0 +1,34 @@
+{
+  "task_id": "trace_units_006",
+  "run_id": "run_003",
+  "agent_version": "a10dd34",
+  "model": "deepseek",
+  "model_actual": "deepseek-flash",
+  "first_action": "explore",
+  "tools_used": [
+    "bash",
+    "edit_file",
+    "glob",
+    "read_file"
+  ],
+  "max_usage_ratio": 0.0034,
+  "compactions": 0,
+  "status": "success",
+  "error": null,
+  "trajectory": {
+    "steps": 19,
+    "tool_calls": 10,
+    "llm_calls": 9,
+    "tokens": 27153,
+    "latency_ms": 84363
+  },
+  "evaluation": {
+    "task_success": true,
+    "correctness": 1.0,
+    "completeness": 1.0,
+    "tool_usage": 1.0,
+    "groundedness": null,
+    "error_recovery": null
+  },
+  "failures": []
+}

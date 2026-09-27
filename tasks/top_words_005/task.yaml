@@ -1,0 +1,15 @@
+task_id: top_words_005
+category: completeness
+instruction: |
+  wordcount.py 的 top_words() 有三处不符合需求，请逐一修正：
+
+  1. 大小写不敏感：'The' 和 'the' 应该算同一个词，输出统一用小写
+  2. 次数相同的词，按字母序升序排列（现在顺序是任意的）
+  3. 文本里没有任何词时，返回空列表
+
+  返回值形状不变：[(词, 次数), ...]，最多 3 项。
+
+  请用 edit_file 做精准修改，不要用 write_file 覆盖已有的源文件。
+expected_tools: [read_file, edit_file]
+forbidden_tools: [write_file]
+max_tool_calls: 15

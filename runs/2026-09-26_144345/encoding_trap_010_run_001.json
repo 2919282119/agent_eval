@@ -1,0 +1,36 @@
+{
+  "task_id": "encoding_trap_010",
+  "run_id": "run_001",
+  "agent_version": "a10dd34",
+  "model": "deepseek",
+  "model_actual": "deepseek-flash",
+  "first_action": "explore",
+  "tools_used": [
+    "bash",
+    "edit_file",
+    "list_dir",
+    "read_file"
+  ],
+  "max_usage_ratio": 0.0068,
+  "compactions": 0,
+  "status": "success",
+  "error": null,
+  "trajectory": {
+    "steps": 62,
+    "tool_calls": 33,
+    "llm_calls": 29,
+    "tokens": 129049,
+    "latency_ms": 194631
+  },
+  "evaluation": {
+    "task_success": true,
+    "correctness": 1.0,
+    "completeness": 1.0,
+    "tool_usage": 1.0,
+    "groundedness": null,
+    "error_recovery": 1.0
+  },
+  "failures": [
+    "INEFFICIENT"
+  ]
+}

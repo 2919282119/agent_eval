@@ -1,0 +1,7 @@
+# 统一按 LF 存和取出。任务工作区里的文件是**题面的一部分**，换行符一变
+# 题目就跟着变（agent 读到的内容和验收比对的东西都不对了）。
+* text=auto eol=lf
+
+# encoding_trap_010 的陷阱就靠字节本身 —— 这个 CSV 是 GBK 编码，
+# 任何换行/编码转换都会改内容，改完陷阱就废了。
+tasks/encoding_trap_010/workspace/prices.csv -text

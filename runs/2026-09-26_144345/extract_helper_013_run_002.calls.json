@@ -1,0 +1,206 @@
+{
+  "final_answer": "完成。\n\n## 改动内容\n\n**新建 `duration.py`** — 公共函数，逻辑与原实现逐字一致：\n\n```python\ndef format_duration(seconds):\n    hours, rest = divmod(int(seconds), 3600)\n    minutes, secs = divmod(rest, 60)\n    if hours:\n        return f\"{hours}h {minutes:02d}m {secs:02d}s\"\n    return f\"{minutes}m {secs:02d}s\"\n```\n\n**6 个文件** 都改成 `from duration import format_duration` + 一行转发调用，函数名/参数名全部保留：\n\n| 文件 | 保留的函数（参数名不变） |\n|---|---|\n| invoice.py | `invoice_age(created_seconds_ago)` |\n| logline.py | `line_uptime(seconds_up)` |\n| sla.py | `sla_elapsed(elapsed_seconds)` |\n| billing.py | `billing_window(window_seconds)` |\n| uptime.py | `host_uptime(seconds)` |\n| progress.py | `progress_age(started_seconds_ago)` |\n\n## 验证\n\n跑了一遍等价性测试，用「原实现」当基准，对 `0, 5, 59, 60, 61, 65, 599, 3599, 3600, 3601, 3661, 7325, 86399, 360000, 90061` 以及浮点输入（`3661.9 / 59.9 / 0.4`，因为原来有 `int()` 转换）逐一比对：\n\n- `format_duration` 与旧实现输出 100% 一致\n- 6 个包装函数的输出也全部一致\n- 「不足一小时不显示小时」保留：`0 -> \"0m 00s\"`、`65 -> \"1m 05s\"`、`3600 -> \"1h 00m 00s\"`\n\n结果 `ALL OK`。除新建 `duration.py` 外，只改了这 6 个文件（目录里的 `__pycache__` 是运行验证时产生的缓存，可忽略）。",
+  "calls": [
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "ls -la"
+      },
+      "ok": false,
+      "error": "退出码 1"
+    },
+    {
+      "name": "glob",
+      "arguments": {
+        "pattern": "**/{invoice,logline,sla,billing,uptime,progress}.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "list_dir",
+      "arguments": {
+        "path": "."
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "invoice.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "logline.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "sla.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "billing.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "uptime.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "progress.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "grep",
+      "arguments": {
+        "pattern": "import",
+        "path": "."
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "find . -name \"*.py\" -o -name \"*.txt\" -o -name \"*.md\" | head -50; ls"
+      },
+      "ok": false,
+      "error": "退出码 255"
+    },
+    {
+      "name": "write_file",
+      "arguments": {
+        "path": "duration.py",
+        "content": "def format_duration(seconds):\n    \"\"\"把秒数格式化成人可读的时长，例如 \"1h 02m 05s\"。\n\n    不足一小时时省略小时部分，例如 \"02m 05s\"。\n    \"\"\"\n    hours, rest = divmod(int(seconds), 3600)\n    minutes, secs = divmod(rest, 60)\n    if hours:\n        return f\"{hours}h {minutes:02d}m {secs:02d}s\"\n    return f\"{minutes}m {secs:02d}s\"\n"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "write_file",
+      "arguments": {
+        "content": "from duration import format_duration\n\n\ndef invoice_age(created_seconds_ago):\n    \"\"\"账单账龄。\"\"\"\n    return format_duration(created_seconds_ago)\n",
+        "path": "invoice.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "write_file",
+      "arguments": {
+        "content": "from duration import format_duration\n\n\ndef line_uptime(seconds_up):\n    \"\"\"这条日志对应的进程已跑了多久。\"\"\"\n    return format_duration(seconds_up)\n",
+        "path": "logline.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "write_file",
+      "arguments": {
+        "content": "from duration import format_duration\n\n\ndef sla_elapsed(elapsed_seconds):\n    \"\"\"工单已耗时。\"\"\"\n    return format_duration(elapsed_seconds)\n",
+        "path": "sla.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "write_file",
+      "arguments": {
+        "content": "from duration import format_duration\n\n\ndef billing_window(window_seconds):\n    \"\"\"计费窗口长度。\"\"\"\n    return format_duration(window_seconds)\n",
+        "path": "billing.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "write_file",
+      "arguments": {
+        "content": "from duration import format_duration\n\n\ndef host_uptime(seconds):\n    \"\"\"主机已运行时长。\"\"\"\n    return format_duration(seconds)\n",
+        "path": "uptime.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "write_file",
+      "arguments": {
+        "content": "from duration import format_duration\n\n\ndef progress_age(started_seconds_ago):\n    \"\"\"任务已开始多久。\"\"\"\n    return format_duration(started_seconds_ago)\n",
+        "path": "progress.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python -c \"\nimport invoice, logline, sla, billing, uptime, progress\nfrom duration import format_duration\n\ncases = [0, 5, 59, 60, 61, 65, 599, 3599, 3600, 3601, 3661, 7325, 86399, 360000, 90061]\n\ndef old(seconds):\n    hours, rest = divmod(int(seconds), 3600)\n    minutes, secs = divmod(rest, 60)\n    if hours:\n        return f'{hours}h {minutes:02d}m {secs:02d}s'\n    return f'{minutes}m {secs:02d}s'\n\nok = True\nfor c in cases:\n    exp = old(c)\n    if format_duration(c) != exp:\n        ok = False; print('MISMATCH dur', c, exp, format_duration(c))\n    for fn in (invoice.invoice_age, logline.line_uptime, sla.sla_elapsed, billing.billing_window, uptime.host_uptime, progress.progress_age):\n        if fn(c) != exp:\n            ok = False; print('MISMATCH', fn.__name__, c)\n\n# float input parity (old code did int() cast)\nfor c in [3661.9, 59.9, 0.4]:\n    assert format_duration(c) == old(c), c\n\nfor x in cases[:6]:\n    print(x, '->', format_duration(x))\nprint('ALL OK' if ok else 'FAILED')\n\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python -c \"print('hi')\"; echo \"---\"; py -c \"print('hi')\" 2>nul; echo \"exit=$?\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "write_file",
+      "arguments": {
+        "content": "import invoice, logline, sla, billing, uptime, progress\nfrom duration import format_duration\n\ncases = [0, 5, 59, 60, 61, 65, 599, 3599, 3600, 3601, 3661, 7325, 86399, 360000, 90061, 3661.9, 59.9, 0.4]\n\ndef old(seconds):\n    hours, rest = divmod(int(seconds), 3600)\n    minutes, secs = divmod(rest, 60)\n    if hours:\n        return f\"{hours}h {minutes:02d}m {secs:02d}s\"\n    return f\"{minutes}m {secs:02d}s\"\n\nok = True\nfor c in cases:\n    exp = old(c)\n    got = format_duration(c)\n    if got != exp:\n        ok = False\n        print(\"MISMATCH duration\", c, exp, got)\n    for fn in (invoice.invoice_age, logline.line_uptime, sla.sla_elapsed,\n               billing.billing_window, uptime.host_uptime, progress.progress_age):\n        if fn(c) != exp:\n            ok = False\n            print(\"MISMATCH\", fn.__name__, c, exp, fn(c))\n\nprint(\"samples:\")\nfor x in cases[:6] + [3600, 3661]:\n    print(\"  \", x, \"->\", format_duration(x))\nprint(\"ALL OK\" if ok else \"FAILED\")\n",
+        "path": "_verify_tmp.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "python _verify_tmp.py 2>&1; echo \"exit=$?\""
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "bash",
+      "arguments": {
+        "command": "del _verify_tmp.py 2>nul || rm -f _verify_tmp.py; ls"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "list_dir",
+      "arguments": {
+        "path": "."
+      },
+      "ok": true,
+      "error": null
+    }
+  ]
+}

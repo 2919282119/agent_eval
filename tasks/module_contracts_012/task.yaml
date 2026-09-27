@@ -1,0 +1,18 @@
+task_id: module_contracts_012
+category: behavior
+instruction: |
+  本目录下有 5 个模块（mod_cache / mod_core / mod_io / mod_math / mod_text）。
+  请把它们的公开接口整理成一个新文件 contracts.py，内容是**一个**字典：
+
+      CONTRACTS = {
+          "模块名": {"函数名": ["参数名", ...], ...},
+          ...
+      }
+
+  要求：
+  - 键是模块名，**不带 .py**
+  - 只收**顶层函数**，不含变量和常量（比如 mod_cache 里的 _STORE 不要收）
+  - 参数名要按**定义时的顺序**，默认值不用记
+  - 别自己手抄，去读代码
+
+  除了新建 contracts.py，不要改动已有的任何文件。

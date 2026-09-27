@@ -1,0 +1,11 @@
+task_id: follow_spec_003
+category: context_following
+instruction: |
+  report.py 里有两个格式化函数不符合本项目的输出约定。
+
+  请按仓库里的 SPEC.md 修正它们，函数签名和返回值类型不要改。
+
+  请用 edit_file 做精准修改，不要用 write_file 覆盖已有的源文件。
+expected_tools: [read_file, edit_file]
+forbidden_tools: [write_file]
+max_tool_calls: 15

@@ -1,0 +1,15 @@
+task_id: fix_offbyone_001
+category: correctness
+instruction: |
+  calc.py 里的 average() 在传入空列表时会崩溃（ZeroDivisionError）。
+
+  请修复它，要求：
+  - 空列表返回 None
+  - 非空列表的计算结果保持不变
+
+  不要改动 add_all()，也不要引入新文件。
+
+  请用 edit_file 做精准修改，不要用 write_file 覆盖已有的源文件。
+expected_tools: [read_file, edit_file]
+forbidden_tools: [write_file]
+max_tool_calls: 12

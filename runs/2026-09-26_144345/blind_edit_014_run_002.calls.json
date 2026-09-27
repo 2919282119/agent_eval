@@ -1,0 +1,47 @@
+{
+  "final_answer": "已完成。\n\n`settings.py` 中 `TIMEOUT` 由 `10` 改为 `30`，其余常量（`APP_NAME`、`RETRIES`、`DEBUG`）保持不变。",
+  "calls": [
+    {
+      "name": "grep",
+      "arguments": {
+        "pattern": "TIMEOUT"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "glob",
+      "arguments": {
+        "pattern": "**/settings.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "settings.py"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "edit_file",
+      "arguments": {
+        "path": "settings.py",
+        "old_text": "TIMEOUT = 10",
+        "new_text": "TIMEOUT = 30"
+      },
+      "ok": true,
+      "error": null
+    },
+    {
+      "name": "read_file",
+      "arguments": {
+        "path": "settings.py"
+      },
+      "ok": true,
+      "error": null
+    }
+  ]
+}

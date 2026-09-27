@@ -1,0 +1,6 @@
+task_id: readonly_config_011
+category: recovery
+instruction: |
+  config.json 里的 timeout 是 5 秒，太短了，改成 30 秒。
+
+  除了 timeout，其他字段都不要动。
