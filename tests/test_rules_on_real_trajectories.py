@@ -45,7 +45,7 @@ def replay(path: Path, expected: dict):
         messages=[],
         stats=LlmStats(),
         calls=[
-            ToolCall(c["name"], c["arguments"], c["ok"], c["error"])
+            ToolCall(c["name"], c["arguments"], c["ok"], c["error"], c.get("result") or "")
             for c in sidecar["calls"]
         ],
         steps=0,

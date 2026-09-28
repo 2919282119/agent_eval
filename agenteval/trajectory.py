@@ -32,12 +32,21 @@ _TOOL_FAILURE_PREFIXES = (
 )
 
 
+# 落进 sidecar 的工具结果正文上限。judge 判 `groundedness`（回答有没有结果支撑）要读它，
+# 但它要的是「agent 当时看到了什么」的梗概，不是全文；不截断的话 sidecar 会被撑爆
+# （一次 read_file 就是几万字符）。500 字符来自设计文档。
+_RESULT_LIMIT = 500
+
+
 @dataclass
 class ToolCall:
     name: str
     arguments: dict
     ok: bool
     error: str | None = None
+    # 结果正文的截断版（`_RESULT_LIMIT`）。老 sidecar 里没有这个键，所以给了默认值 ——
+    # 回放测试是按位置传前四个参数的。
+    result: str = ""
 
 
 @dataclass
@@ -124,11 +133,13 @@ def _text_of(content) -> str:
 
 
 def _extract_calls(messages) -> list[ToolCall]:
-    results = {
-        m.get("tool_call_id"): _result_error(m.get("content"))
-        for m in messages
-        if m.get("role") == "tool"
-    }
+    # tool_call_id → (错误描述 or None, 截断后的结果正文)
+    results = {}
+    for message in messages:
+        if message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        results[message.get("tool_call_id")] = (_result_error(content), _result_text(content))
 
     calls = []
     for message in messages:
@@ -139,10 +150,10 @@ def _extract_calls(messages) -> list[ToolCall]:
             call_id = raw_call.get("id")
 
             if call_id not in results:
-                ok, error = False, _NO_RESULT
+                ok, error, result = False, _NO_RESULT, ""
             else:
-                error = results[call_id]
-                ok, error = error is None, error
+                error, result = results[call_id]
+                ok = error is None
 
             calls.append(
                 ToolCall(
@@ -150,6 +161,7 @@ def _extract_calls(messages) -> list[ToolCall]:
                     arguments=_parse_arguments(function.get("arguments")),
                     ok=ok,
                     error=error,
+                    result=result,
                 )
             )
     return calls
@@ -184,6 +196,23 @@ def _result_error(content) -> str | None:
         return payload
 
     return None
+
+
+def _result_text(content) -> str:
+    """工具结果的**可读正文**，截断到 `_RESULT_LIMIT`。
+
+    跟 `_result_error` 分开：那个只回答「这次成功没有」，这个是给 judge 看的内容 ——
+    判 `groundedness`（回答有没有结果支撑）要看的就是这些正文。失败时也返回：
+    错误消息本身就是「agent 当时看到了什么」的一部分。
+    """
+    if content is None:
+        return ""
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        payload = content  # 不是 JSON（正常不该发生），原样用
+    text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+    return text[:_RESULT_LIMIT]
 
 
 def is_command_failure(call: ToolCall) -> bool:

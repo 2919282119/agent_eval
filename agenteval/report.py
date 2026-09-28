@@ -1,5 +1,6 @@
 """聚合 N 个 run → 文本报告 + 汇总数字。不依赖 miniCC。"""
 
+import statistics
 from collections import Counter
 
 DIMENSIONS = [
@@ -69,6 +70,8 @@ def summarize(records) -> dict:
         },
         "first_action": _first_action_ratios(valid),
         "context": _context_load(valid),
+        "noise": _noise(records),
+        "judge": _judge_summary(records),
         "failures": {tag: _tag_ratio(valid, tag) for tag in FAILURE_TAGS},
         "pass_at_k": _pass_at_k(records),
         "pass_k": _pass_k(records),
@@ -91,6 +94,8 @@ def render(records, baseline=None) -> str:
         lines.append(f"{label:<18}{_dimension_cell(name, value, summary, label)}")
 
     lines.append("")
+    lines.append(_judge_text(summary))
+    lines.append("")
     lines.append("Efficiency  (仅统计 success 的 run)")
     if summary["k"] == 1:
         lines.append(f"  {_SINGLE_RUN_NOTE}")
@@ -102,6 +107,8 @@ def render(records, baseline=None) -> str:
         f"Avg latency {_seconds(efficiency['latency_ms'])}"
     )
     lines.append("  First action     " + _first_action_text(summary["first_action"]))
+    # 「这个数自己会晃多少」—— 没有它，上面的平均值和 diff 里的 delta 都会被读成结论
+    lines.append(f"  {'Noise':<17}{_noise_text(summary['noise'], summary['k'])}")
     # 负载指标，不是评估信号 —— 摆在这里是为了让人一眼看出「离压缩线还有多远」，
     # 也就解释了「压缩这条线为什么没测」（deepseek 窗口 100 万，阈值 80 万 token）
     context = summary["context"]
@@ -234,7 +241,8 @@ def _baseline_conflicts(current, base) -> tuple[list[str], list[str]]:
         - `k` 不同 → 观测次数不同，两侧精度不对等
         - 缺 `temperature` 字段 → 老记录，核不出来
 
-    跟 `feat.md` 里 Jev 的 `questions_hash` 是同一条原则：条件不一致就说清楚。
+    原则是「条件不一致就说清楚」—— 藏起来比说出来危险得多，读者会把「两组不同条件下的
+    数字之差」当成结论。
     """
     fatal, warn = [], []
     now, old = current["identity"], base["identity"]
@@ -313,6 +321,72 @@ def _context_load(records) -> dict:
         "max_usage_ratio": max(ratios) if ratios else None,
         "compactions": sum(r.get("compactions") or 0 for r in records),
     }
+
+
+def _judge_entries(records) -> list[dict]:
+    """每条 run 的 primary judge 结果。没判过的记录直接跳过。"""
+    entries = []
+    for record in records:
+        judge = record.get("judge") or {}
+        entry = judge.get(judge.get("primary") or "")
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries
+
+
+def _judge_summary(records) -> dict:
+    """judge 这一面的元信息：谁判的、哪版 prompt、判了几条、结论是什么。
+
+    单独汇总而不是混进五维分：judge 是**第二评估面**，它的模型和 prompt 版本
+    都得能跟着批次走 —— 不然两轮的语义分数没法比。
+    """
+    entries = _judge_entries(records)
+    succeeded = [entry for entry in entries if entry.get("status") == "success"]
+    return {
+        "models": sorted({entry.get("model") for entry in entries if entry.get("model")}),
+        "prompt_hashes": sorted(
+            {entry.get("prompt_hash") for entry in entries if entry.get("prompt_hash")}
+        ),
+        "judged": len(entries),
+        "failed": len(entries) - len(succeeded),
+        "claims_consistent": _mean(
+            [
+                ((entry.get("results") or {}).get("claims_consistent") or {}).get("value")
+                for entry in succeeded
+            ]
+        ),
+    }
+
+
+# 印在报告里的噪声指标。顺序就是显示顺序。
+_NOISE_FIELDS = (("tool_calls", "tool calls"), ("tokens", "tokens"), ("latency_ms", "latency"))
+
+
+def _noise(records) -> dict:
+    """每个效率指标「什么都不改、这个数自己会晃多少」。
+
+    算法：同题 k 次重复的**组内变异系数**（标准差 / 均值），跨题取中位数。
+    这是判断 delta 有没有意义的唯一依据 —— delta 比它小，读出来的就是噪声。
+    k<2 时算不出来，只有一次观测。
+
+    只在 `success` 的 run 上算，跟效率均值一个口径：否则「失败得快」会被算成波动。
+    """
+    out = {}
+    for field, _ in _NOISE_FIELDS:
+        spreads = []
+        for runs in _group_by_task(_valid(records)).values():
+            values = [
+                r.get("trajectory", {}).get(field)
+                for r in runs
+                if r["status"] == "success" and r.get("trajectory", {}).get(field)
+            ]
+            if len(values) < 2:
+                continue
+            mean = statistics.mean(values)
+            if mean:
+                spreads.append(statistics.pstdev(values) / mean)
+        out[field] = statistics.median(spreads) if spreads else None
+    return out
 
 
 def _subagent_ratio(records) -> float | None:
@@ -401,9 +475,49 @@ def _per_task(records) -> dict:
 # ---------- 文本格式 ----------
 
 
+def _noise_text(noise, k) -> str:
+    """噪声那一行。k<2 时算不出来 —— 直说，别留个空白让人以为是 0。"""
+    if all(value is None for value in noise.values()):
+        return f"算不出来（k={k or '?'}，每个任务至少要跑 2 次）"
+    body = "   ".join(
+        f"{label} {_pct_signed(noise[field])}" for field, label in _NOISE_FIELDS
+    )
+    return f"{body}   （同题重复跑的组内散布，中位数）"
+
+
+def _pct_signed(value) -> str:
+    return "n/a" if value is None else f"±{value:.0%}"
+
+
+def _judge_text(summary) -> str:
+    """judge 那一段。没判过就把命令写出来 —— 别让读者把 n/a 读成 0 分。"""
+    judge = summary["judge"]
+    if not judge["judged"]:
+        return (
+            "Judge        （没判过。跑 python -m agenteval.judge <结果目录> "
+            "--model <判官模型> 补上）"
+        )
+
+    # 分母是**有效 run**，不是全部 —— error 的 run 不判也不进统计
+    valid_runs = summary["runs"] - summary["errors"]
+    head = (
+        f"Judge        model {_join(judge['models'])}   "
+        f"prompt {_join(judge['prompt_hashes'])}   "
+        f"judged {judge['judged']}/{valid_runs}"
+    )
+    if judge["failed"]:
+        head += f"（{judge['failed']} 条判失败，未计入）"
+
+    lines = [head]
+    if judge["claims_consistent"] is not None:
+        lines.append(f"  Claims consistent  {_pct(judge['claims_consistent'])}")
+    return "\n".join(lines)
+
+
 def _dimension_cell(name, value, summary, label) -> str:
     if name == "groundedness":
-        return "n/a (needs judge)"
+        # 没跑过 judge 时保持 n/a —— **不能把「没判」显示成 0%**
+        return _pct(value) if value is not None else "n/a (needs judge)"
     if name == "task_success":
         cell = _pct(value)
         if summary["k"] and summary["k"] > 1:
@@ -460,6 +574,8 @@ def _render_diff(current, base, baseline_runs) -> list[str]:
             f"{_tokens(current['efficiency']['tokens'])}"
         )
 
+    lines += _render_judge_diff(current, base)
+
     lines.append("  Per task")
     if single:
         lines.append(f"    （{_SINGLE_RUN_NOTE} —— 只报成功率的翻转）")
@@ -474,6 +590,40 @@ def _render_diff(current, base, baseline_runs) -> list[str]:
             lines.append(line)
 
     return lines
+
+
+def _render_judge_diff(current, base) -> list[str]:
+    """语义面的对比。
+
+    判官换了（prompt 版本或模型），分数就不是同一把尺子量出来的 —— 这时候**不出数字**，
+    只说明为什么。跟确定性那边一个原则：条件不一致就不相减。
+    """
+    now, old = current["judge"], base["judge"]
+    if not now["judged"] and not old["judged"]:
+        return []
+    if not now["judged"] or not old["judged"]:
+        return ["  Semantic (judge)", "    跳过：有一边没判过，语义分没法比"]
+    if now["prompt_hashes"] != old["prompt_hashes"]:
+        return [
+            "  Semantic (judge)",
+            f"    跳过：两边 prompt 版本不同（{_join(old['prompt_hashes'])} → "
+            f"{_join(now['prompt_hashes'])}）",
+        ]
+    if now["models"] != old["models"]:
+        return [
+            "  Semantic (judge)",
+            f"    跳过：两边判官模型不同（{_join(old['models'])} → {_join(now['models'])}）",
+        ]
+
+    return [
+        "  Semantic (judge)",
+        f"    Groundedness      {_pct(base['dimensions']['groundedness'])} → "
+        f"{_pct(current['dimensions']['groundedness'])}"
+        f"{_delta_pct(base['dimensions']['groundedness'], current['dimensions']['groundedness'])}",
+        f"    Claims consistent  {_pct(base['judge']['claims_consistent'])} → "
+        f"{_pct(current['judge']['claims_consistent'])}"
+        f"{_delta_pct(base['judge']['claims_consistent'], current['judge']['claims_consistent'])}",
+    ]
 
 
 def _task_diff_line(task_id, before, after, numeric=True) -> str | None:

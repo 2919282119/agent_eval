@@ -115,7 +115,7 @@ def test_run_task_end_to_end(tmp_path):
 
     # sidecar 里有逐次工具调用明细 + 最终回答，能用来事后核对失败标签
     assert result.calls
-    assert {"name", "arguments", "ok", "error"} == set(result.calls[0])
+    assert {"name", "arguments", "ok", "error", "result"} == set(result.calls[0])
     assert result.final_answer
 
 

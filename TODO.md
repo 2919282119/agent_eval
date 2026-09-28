@@ -23,15 +23,15 @@ python -m agenteval.cli --tasks tasks/ --k 1     # 12 题，实测约 10.5 分�
 | 优先级 | 工作 | 状态 / 验收 |
 |---|---|---|
 | P0 | 固定 baseline 对比协议：相同任务集、模型、`k`、环境；记录并核对 `agent_version` / `model_actual` | **[x]** 2026-09-28：自动一致性检查已落地；环境仍需人工保证 |
-| P1 | 完成 Jev 设计文档同步：把 schema、`groundedness`、`questions_hash` 的约束落到 `CLAUDE.md` / `feat.md` | 设计待落地；接入等待 TypeSafe key |
+| P1 | 接入 LLM-as-a-judge（**取代原 Jev 方案**，不再等 TypeSafe key）—— 见「LLM-as-a-judge」一节 | **[x]** 2026-09-28 已实施；**尚未在真实 run 上跑过**（要真 key）|
 | P2 | 准备第二个 miniCC 版本，两版各用相同条件跑 `k>=3`，再使用 `--baseline` | **等待第二版本** |
 | P3 | 根据双版本数据决定是否改进效率统计：中位数 / 分位数 / 总体成本 / temperature 配置 | 尚未实施 |
 | P4 | 处理 Windows shell 污染；优先考虑统一 shell 环境，再评估 error recovery 规则 | 已知问题，暂不阻塞当前版本对比 |
 | P5 | 长期改 runner 为子进程隔离，再考虑并行 | v2 |
 | P6 | 只有现有任务无法区分版本时，才继续增加机制专项任务 | 现有 12 题先保持冻结 |
 
-当前不建议先做：继续扩充任务、引入语义 judge、或根据单版本 k=1 数据调整阈值 ——
-缺少双版本对照时它们只会增加解释成本。
+当前不建议先做：继续扩充任务、或根据单版本 k=1 数据调整阈值 —— 缺少双版本对照时
+它们只会增加解释成本。
 
 ### Baseline 对比协议
 
@@ -219,8 +219,8 @@ Failure Distribution  WRONG_TOOL 0.62   INEFFICIENT 0.25   CLAIMS_WITHOUT_ACTION
 | 5b | 问题 1 的 B 步：出 6 道新题 | 大，离线可验 | **[x]** |
 | 6 | 第一段跑 k=1 全量 → 手工核对标签 → 固化成 fixture | 中，要跑 API | **[x]** 2026-09-26，约 10.5 分钟 |
 | 6b | k=3 试跑（**单版本**，只取重复跑的散布，不做版本对比）| 中，要跑 API | **[x]** 2026-09-26，见 D3 |
-| 7 | 把 Jev 的设计并入 `CLAUDE.md`：schema、`groundedness` 填充规则、`questions_hash` 的 diff 保护 | 中 | **[ ]** |
-| 8 | 接入 Jev（等 TypeSafe key）—— 它填的 `groundedness` 是唯一空着的维度 | 等 key | **[ ]** |
+| 7 | 把语义面的设计并进 `CLAUDE.md`（schema、`groundedness` 填充规则、`prompt_hash` 的 diff 保护）| 中 | **[x]** 2026-09-28 |
+| 8 | 语义面接入（原 Jev 改为普通 LLM）—— 它填的 `groundedness` 是唯一空着的维度 | 中 | **[x]** 代码完成；**真跑一次待用户给 key** |
 | 9 | 第二段跑 k≥3 做版本对比（12 题 ≈ 36 run，70–100 分钟）| 大，要两个版本 | **[ ] 等用户准备第二个 miniCC 版本** |
 
 问题 4b（定向触发任务）**已并入第 5 项** —— 只有 `NO_EXPLORATION` 值得为它出题，
@@ -228,14 +228,26 @@ Failure Distribution  WRONG_TOOL 0.62   INEFFICIENT 0.25   CLAIMS_WITHOUT_ACTION
 
 > **卡在用户这边的事**：第 9 项（版本对比）需要**第二个 miniCC 版本**。
 > 2026-09-26 确认暂时没有，用户会自己准备。**这之前不要催**，
-> 推进不依赖它的部分：出新题、逐题精度（温度实验 / 改用中位数）、Jev 接入。
+> 推进不依赖它的部分：出新题、逐题精度（温度实验 / 改用中位数）、LLM-judge 接入。
 > 版本到手后：两版各 k≥3，后一版用 `--baseline` 指向前一版留下的目录。
+
+### 测量风险（未修，来自原 `feat.md`）
+
+| 风险 | 影响 |
+|---|---|
+| 子 agent 在 `ThreadPoolExecutor` 里更新共享统计对象 | `llm_calls` / token 计数可能**少记**，当前影响未知 |
+| `agent.context` 持有独立的 `call_llm` 引用 | 压缩那一次调用可能没被 runner 统计到；换小窗口模型时会系统性低估成本 |
+
+**工具覆盖边界**：当前任务只覆盖 6 个基础工具。`load_skill` / `rag_search` 依赖全局清单，
+`search_web` 依赖外网，都不适合做默认可复现任务；`run_subagent` 理论上能出本地任务，
+但 36 个真实 run 里一次没用过。将来要测这些能力，**必须先由 runner 为每个任务注入独立的
+skill / 知识库 / 网络替身**，不能依赖用户全局目录或真实外网。
 
 ## 问题 1 落地计划
 
 执行顺序 A/B 可离线验，C 之后才要 API。原设计全文在已删除的 `feat-task-redesign.md`，
-**仍然成立**的部分（两条测量准确性风险、工具覆盖边界）保留在 `feat.md` 的
-「任务重设计遗留备注」。**C 已判定走不通**，理由见 C 节。
+**仍然成立**的部分（两条测量风险、工具覆盖边界）已并入下面「测量风险」一节。
+**C 已判定走不通**，理由见 C 节。
 
 ### A. 改 harness（纯代码 + 测试）—— **已完成 2026-09-25**
 
@@ -424,12 +436,57 @@ S4 `metrics.py` → S5 `report.py` → S6 `cli.py` → S7 攒 8 道题 → S8 �
 - **`RunRecord` 比原设计多了 3 个顶层字段**：`model_actual`、`first_action`、
   `error`（runner 自身异常信息，便于排查；正常 run 为 `null`）
 
+## LLM-as-a-judge —— **已实施 2026-09-28**
+
+设计与约束已落进 `CLAUDE.md`「语义面（judge）」和 `README.md`。这里只记进度和取舍：
+
+- 拆成**独立一步**（`python -m agenteval.judge <目录> --model <判官模型>`），不绑在 run 里 ——
+  agent 跑一次几十分钟、judge 很便宜，绑在一起的话改 prompt 就得重跑整批
+- sidecar 补上**工具结果的截断版**（500 字符）：唯一不可逆的改动，存了才能事后补判
+- 记录多两个字段：`instruction`（让记录自包含，judge 要读「当时问的是什么」）和顶层 `judge`
+- 判官模型**必填、不设默认** —— 拿被测模型判自己有偏（deepseek 的输出该让 kimi 判）
+- 判官换了（prompt 版本或判官模型）就**不出语义数字**，不做成「警告了但还是把数印出来」
+- 测试 **237 → 276 passed**（`tests/test_judge.py` 全新，一次 API 都不调）
+
+**还没做的**：没在真实 run 上跑过，要真 key。原 `feat.md` 的 `uncertain`（概率落在
+`[0.35,0.65]` 算不确定）没搬过来 —— 普通 LLM 没有校准概率，采信自报 confidence 只会得到
+一个没校准的数字。
+
+## 噪声底 + 报告解读 —— **已实施 2026-09-28（下半场）**
+
+- **噪声底**：报告新增 `Noise` 行 —— 同题 k 次重复的**组内**变异系数，跨题取中位数
+  （只在 success 的 run 上算）。k<2 时算不出来，报告直说。这是判断 delta 有没有意义的
+  唯一依据，也是下面解读层那条最关键约束的前提。
+- **报告解读**（`analyze.py` + `cli --analyze`）：LLM 读一遍报告写段分析，追加在末尾。
+  `_SYSTEM` 里四条硬约束：引用具体数字 / **delta 小于噪声必须写「看不出差别」** /
+  没判过不是 0 分 / 只对类别信号下强结论；允许给改进建议但必须标成推测。
+- 测试 **278 → 293 passed**
+
+### 第一次真实数据（2026-09-28 那轮，12 题 × k=3，temp=0.1）
+
+```
+Task Success 97%  (pass@3 100%  pass^3 92%)     Groundedness 88%
+Noise  tool calls ±17%   tokens ±25%   latency ±37%    Claims consistent 93%
+```
+
+- **temp=0.1 的噪声明显小于 temp=1**（早先在 temp=1 数据上算的 tool calls 是 ~29%，
+  现在是 ±17%）。温度那件事确实起作用了。（口径不完全相同，精确比得用同一批数据。）
+- ⚠️ 那次 judge 用的是 **deepseek —— 被测模型自己判自己**，分数偏松，解读时要知道。
+  重判不用重跑 agent：`python -m agenteval.judge runs/<目录>/ --model kimi`
+- ⚠️ `WRONG_TOOL 0.03` 亮了 **1 次**。这条规则历史上假阳性极高（当年 7 条标签 6 条假），
+  真伪待核 —— 别直接当结论。
+
+### 还没做
+
+「让 delta 跟噪声底比」只做了一半：**噪声印出来了，但报告还没逐项标注 delta 是否落在噪声内**
+（现在是把这个判断交给了解读层的 LLM）。要不要让报告自己标，等看过几轮真实数据再定。
+
 ## v2 待办（本版不做，仅记录）
 
-- [ ] **Jev 语义评估**（`groundedness` / `claims_consistent` 两个维度）—— 完整设计在 `feat.md`
-- [ ] LLM-as-Judge + Rubric 体系 —— 与 Jev 是**兄弟实现**（共用 judge 平面，
-      语义各自独立），不是替代关系，设计见 `feat.md`
-- [ ] `HALLUCINATION` 标签（v2 由 Jev 的 `groundedness` 间接覆盖）
+- [ ] Rubric 体系 —— 跟 judge 共用「第二评估面」的位置，但问题格式不同
+- [ ] 让判官接管那几条判不准的规则（`NO_EXPLORATION` / `CLAIMS_WITHOUT_ACTION`）——
+      `claims_consistent` 已经问的是同一件事，先看真实数据再决定要不要撤规则
+- [ ] `HALLUCINATION` 标签（由 judge 的 `groundedness` 间接覆盖）
 - [ ] 进程隔离 / 并行执行（`multiprocessing`，同时解决 chdir 全局态与全局 CC.md）
 - [ ] 开放式任务的评估（当前只支持可程序验证的 coding 任务）
 - [ ] 更细的安全评估（当前只有 bash 危险命令正则，是明确的最小版）

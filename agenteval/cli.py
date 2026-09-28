@@ -8,6 +8,7 @@ from pathlib import Path
 
 from llm.model import DEFAULT_MODEL, MODELS
 
+from agenteval import analyze, judge
 from agenteval.report import load_baseline, render
 from agenteval.runner import run_task
 from agenteval.task import load_task
@@ -38,6 +39,18 @@ def parse_args(argv=None):
         help=f"被测模型（默认 {DEFAULT_MODEL}，可选 {', '.join(sorted(MODELS))}）",
     )
     parser.add_argument("--out", default="runs", help="结果输出根目录（默认 runs）")
+    parser.add_argument(
+        "--judge",
+        default=None,
+        choices=sorted(MODELS),
+        help="跑完顺带判一次语义面（可选）。别填被测模型 —— 自己判自己有偏",
+    )
+    parser.add_argument(
+        "--analyze",
+        default=None,
+        choices=sorted(MODELS),
+        help="跑完让这个模型读一遍报告，写一段分析追加到末尾（可选）",
+    )
     parser.add_argument(
         "--baseline", default=None, help="历史结果目录，追加逐任务的对比 diff"
     )
@@ -73,12 +86,27 @@ def main(argv=None) -> int:
                 write_result(out_dir, result)
                 print(f"    → {summarize_progress(result.record)}", flush=True)
                 records.append(result.record)
+
+        # 语义面：跑完顺手判一次（可选）。judge 本身是独立的一步、只读磁盘，
+        # 所以这里只是替调用者省一条命令 —— 想换 prompt 重判，直接跑
+        # `python -m agenteval.judge <目录> --model <判官模型>` 就行。
+        #
+        # 放在 try 里而**不是 finally 里**：中途 Ctrl-C 时不该突然开始判分。
+        if args.judge:
+            print()
+            judge.main([str(out_dir), "--model", args.judge])
+            # judge 是把结果写回磁盘的，重读一遍才带得上 —— 报告从 records 渲染
+            records = load_baseline(out_dir)
     finally:
         # 被打断（Ctrl-C）或中途崩了也要留一份报告：run json 是一个个落盘的，
         # 报告是唯一还缺的那件。抬头的 `tasks: N` 会如实反映只跑了几个，
         # 所以「跑了一半」看得出来，不会装成一次完整的评估。
         print()
         report = render(records, baseline=baseline)
+        # 解读**放在 finally 里**（跟 judge 相反）：它是「报告的一部分」，而这个 finally
+        # 的契约就是「一定要留一份报告」。代价是 Ctrl-C 之后还会多花一次调用 —— 值。
+        if args.analyze:
+            report += "\n\n" + analyze.section(report, args.analyze)
         print(report)
         write_report(out_dir, report)
         print(f"\n结果已写入 {out_dir}（报告在 report.txt）")

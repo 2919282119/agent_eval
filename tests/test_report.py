@@ -32,6 +32,8 @@ def make_record(
     max_usage_ratio=0.02,
     compactions=0,
     temperature=0.1,
+    groundedness=None,
+    judge=None,
 ):
     record = {
         "task_id": task_id,
@@ -56,7 +58,7 @@ def make_record(
             "correctness": 1.0 if success else 0.5,
             "completeness": 1.0 if success else 0.4,
             "tool_usage": 1.0,
-            "groundedness": None,
+            "groundedness": groundedness,
             "error_recovery": None,
         },
         "failures": list(failures),
@@ -64,7 +66,31 @@ def make_record(
     # None = 老记录里压根没有这个字段（temperature 是后加的）
     if temperature is not None:
         record["temperature"] = temperature
+    if judge is not None:
+        record["judge"] = judge
     return record
+
+
+def make_judge(value=0.9, claims=1.0, model="kimi", prompt="a1b2c3d4", status="success"):
+    """一条 run 的 `judge` 顶层字段（形状跟 agenteval.judge.write_back 一致）。"""
+    return {
+        "primary": "llm",
+        "llm": {
+            "model": model,
+            "prompt_hash": prompt,
+            "status": status,
+            "latency_ms": 420,
+            "usage": {"input_tokens": 4800, "output_tokens": 30},
+            "results": (
+                {
+                    "groundedness": {"value": value, "detail": "有据"},
+                    "claims_consistent": {"value": claims, "detail": "都做了"},
+                }
+                if status == "success"
+                else None
+            ),
+        },
+    }
 
 
 def make_error_record(task_id="t1", run_id="run_002"):
@@ -224,6 +250,77 @@ def test_render_marks_groundedness_as_not_available():
     assert "n/a (needs judge)" in render([make_record()])
 
 
+# ---------- judge 那一面 ----------
+
+
+def _groundedness_line(text):
+    return next(line for line in text.splitlines() if line.startswith("Groundedness"))
+
+
+def test_render_shows_groundedness_when_the_judge_ran():
+    """判过之后那个维度就有数了 —— 不再显示 n/a。"""
+    text = render([make_record(groundedness=0.9, judge=make_judge())])
+
+    assert "n/a (needs judge)" not in text
+    assert _groundedness_line(text).endswith("90%")
+
+
+def test_render_says_how_to_run_the_judge_when_it_never_ran():
+    """没判过要给命令 —— 否则读者只看到一个 n/a，不知道下一步该干嘛。"""
+    text = render([make_record()])
+
+    assert "没判过" in text
+    assert "python -m agenteval.judge" in text
+
+
+def test_render_shows_the_judge_model_and_prompt_version():
+    """judge 的模型和 prompt 版本必须跟着走 —— 不然两轮的语义分数没法比。"""
+    text = render([make_record(groundedness=0.9, judge=make_judge())])
+
+    assert "model kimi" in text
+    assert "prompt a1b2c3d4" in text
+
+
+def test_render_shows_claims_consistent():
+    text = render([make_record(groundedness=0.9, judge=make_judge(claims=0.5))])
+
+    assert "Claims consistent  50%" in text
+
+
+def test_render_does_not_treat_an_unjudged_run_as_zero():
+    """一批里只判了一部分：均分只算判过的，覆盖率如实写。
+
+    把「没判」当 0 分会把一整批干净的 run 拉成低分 —— 这是最要防的那种错。
+    """
+    records = [
+        make_record(task_id="a", groundedness=1.0, judge=make_judge(value=1.0)),
+        make_record(task_id="b", run_id="run_002"),  # 这条没判
+    ]
+
+    summary = summarize(records)
+    text = render(records)
+
+    assert summary["judge"]["judged"] == 1
+    assert summary["dimensions"]["groundedness"] == 1.0  # 只算判过的那条，不是 0.5
+    assert "judged 1/2" in text
+
+
+def test_render_counts_failed_judgements_separately():
+    """判失败的不进均分，但要在报告里显形 —— 静默少一条和「没判」一样坏。"""
+    records = [
+        make_record(task_id="a", groundedness=0.8, judge=make_judge(value=0.8)),
+        make_record(task_id="b", run_id="run_002", judge=make_judge(status="error")),
+    ]
+
+    summary = summarize(records)
+    text = render(records)
+
+    assert summary["judge"]["judged"] == 2
+    assert summary["judge"]["failed"] == 1
+    assert summary["dimensions"]["groundedness"] == 0.8
+    assert "1 条判失败" in text
+
+
 def test_render_notes_that_efficiency_is_conditional():
     assert "仅统计 success 的 run" in render([make_record()])
 
@@ -273,6 +370,39 @@ def test_render_context_load_tolerates_records_from_before_the_fields_existed():
 
     assert "max usage n/a" in render([old])
     assert "compactions 0" in render([old])
+
+
+def test_render_reports_the_noise_floor_when_k_is_at_least_2():
+    """「这个数自己会晃多少」—— 没有它，平均值和 diff 里的 delta 都会被读成结论。"""
+    records = [
+        make_record(task_id="a", run_id=f"r{i}", tool_calls=value)
+        for i, value in enumerate((8, 10, 12))
+    ]
+
+    text = render(records)
+
+    assert "tool calls ±" in text
+    assert "同题重复跑的组内散布" in text
+
+
+def test_render_says_the_noise_cannot_be_computed_at_k1():
+    """k=1 时算不出来 —— 直说，别留个空白让人以为是 0。"""
+    text = render([make_record(task_id="a"), make_record(task_id="b", run_id="r2")])
+
+    assert "算不出来" in text
+
+
+def test_noise_uses_the_within_task_spread_not_the_between_task_one():
+    """噪声必须是**同题**重复跑的散布。
+
+    拿跨题的差别当噪声就废了 —— 「这题本来就难」会被算成「数字会晃」。这里两道题各自
+    都很稳（组内散布 0）、均值却差 10 倍，正确答案是 0。
+    """
+    records = [
+        make_record(task_id="a", run_id=f"r{i}", tool_calls=10) for i in range(3)
+    ] + [make_record(task_id="b", run_id=f"r{i}", tool_calls=100) for i in range(3)]
+
+    assert summarize(records)["noise"]["tool_calls"] == 0.0
 
 
 def test_diff_reports_efficiency_change_when_success_is_unchanged():
@@ -550,6 +680,70 @@ def test_render_shows_the_temperature_in_the_header():
 def test_render_marks_an_unknown_temperature():
     """老记录没有这个字段时要显式标成未知，不能悄悄印个空。"""
     assert "temp: ?" in render([make_record(temperature=None)])
+
+
+# ---------- 语义面的 diff ----------
+
+
+def _semantic_section(text):
+    return text.split("Semantic (judge)")[1].split("Per task")[0]
+
+
+def test_diff_shows_semantic_numbers_when_the_judge_is_the_same():
+    current = [
+        make_record(task_id="a", run_id=f"r{i}", groundedness=0.9,
+                    judge=make_judge(value=0.9, claims=0.8))
+        for i in range(3)
+    ]
+    baseline = [
+        make_record(task_id="a", run_id=f"r{i}", groundedness=0.5,
+                    judge=make_judge(value=0.5, claims=0.4))
+        for i in range(3)
+    ]
+
+    section = _semantic_section(render(current, baseline=baseline))
+
+    assert "50% → 90%" in section
+    assert "40% → 80%" in section
+
+
+def test_diff_refuses_semantic_numbers_when_the_prompt_changed():
+    """prompt 版本不同 = 问的不是同一个问题 —— 拿两把尺子的读数相减没有意义。"""
+    current = [make_record(task_id="a", groundedness=0.9, judge=make_judge(prompt="newhash1"))]
+    baseline = [make_record(task_id="a", groundedness=0.5, judge=make_judge(prompt="oldhash1"))]
+
+    section = _semantic_section(render(current, baseline=baseline))
+
+    assert "跳过" in section
+    assert "oldhash1 → newhash1" in section
+    assert "→ 90%" not in section
+
+
+def test_diff_refuses_semantic_numbers_when_the_judge_model_changed():
+    """换判官模型跟换 prompt 一样 —— 也是换了一把尺子，不出数字。"""
+    current = [make_record(task_id="a", groundedness=0.9, judge=make_judge(model="kimi"))]
+    baseline = [make_record(task_id="a", groundedness=0.5, judge=make_judge(model="deepseek"))]
+
+    section = _semantic_section(render(current, baseline=baseline))
+
+    assert "跳过" in section
+    assert "判官模型不同" in section
+
+
+def test_diff_skips_semantics_when_only_one_side_was_judged():
+    current = [make_record(task_id="a", groundedness=0.9, judge=make_judge())]
+    baseline = [make_record(task_id="a")]
+
+    section = _semantic_section(render(current, baseline=baseline))
+
+    assert "有一边没判过" in section
+
+
+def test_diff_has_no_semantic_block_when_nobody_was_judged():
+    current = [make_record(task_id="a")]
+    baseline = [make_record(task_id="a")]
+
+    assert "Semantic" not in render(current, baseline=baseline)
 
 
 def test_load_baseline_reads_json_files(tmp_path):

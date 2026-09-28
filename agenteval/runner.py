@@ -282,6 +282,10 @@ def _run_result(
     return RunResult(
         record={
             "task_id": task.task_id,
+            # 指令原文进记录，是为了让记录**自包含**：judge 是事后独立一步，
+            # 它要读「当时问的是什么」。去 tasks/<id>/ 现读的话，题目改过之后
+            # 拿到的就不是当时那份指令了。
+            "instruction": task.instruction,
             "run_id": f"run_{run_idx:03d}",
             "agent_version": agent_version(),
             "model": model,

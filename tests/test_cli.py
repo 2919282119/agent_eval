@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import agenteval.cli as cli
 from agenteval.cli import find_tasks, main, write_report
 from agenteval.report import load_baseline
@@ -75,6 +78,108 @@ def test_main_saves_the_report_next_to_the_run_records(tmp_path, monkeypatch):
     reports = list((tmp_path / "out").glob("*/report.txt"))
     assert len(reports) == 1
     assert reports[0].read_text(encoding="utf-8").startswith("Agent Evaluation Report")
+
+
+def _write_fake_judgement(argv):
+    """冒充 judge.main：直接在磁盘上给每条记录补上 judge 键。"""
+    for path in Path(argv[0]).glob("*.json"):
+        if path.name.endswith(".calls.json"):
+            continue
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["evaluation"]["groundedness"] = 0.8
+        record["judge"] = {
+            "primary": "llm",
+            "llm": {
+                "model": "kimi",
+                "prompt_hash": "abc12345",
+                "status": "success",
+                "results": {
+                    "groundedness": {"value": 0.8, "detail": ""},
+                    "claims_consistent": {"value": 1.0, "detail": ""},
+                },
+            },
+        }
+        path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    return 0
+
+
+def test_main_judges_the_batch_when_asked(tmp_path, monkeypatch):
+    """`--judge` 让一条命令顶原来两条。
+
+    真正要验的是 **cli 在判完之后重读了记录** —— 不重读的话记录改了、报告还是空的，
+    而报告是从内存里的 `records` 渲染的。
+    """
+    write_task(tmp_path / "taskroot", "alpha")
+    monkeypatch.setattr(
+        cli, "run_task", lambda task, run_idx, model: RunResult(FAKE_RECORD, [], "做完了")
+    )
+    seen = []
+    monkeypatch.setattr(
+        cli.judge, "main", lambda argv: (seen.append(argv), _write_fake_judgement(argv))[1]
+    )
+
+    out = tmp_path / "out"
+    assert main(["--tasks", str(tmp_path / "taskroot"), "--out", str(out), "--judge", "kimi"]) == 0
+
+    assert seen[0][1:] == ["--model", "kimi"]
+    text = list(out.glob("*/report.txt"))[0].read_text(encoding="utf-8")
+    assert "80%" in text and "model kimi" in text
+
+
+def test_main_does_not_judge_by_default(tmp_path, monkeypatch):
+    """不传 `--judge` 就一次都不判 —— 默认行为不许变。"""
+    write_task(tmp_path / "taskroot", "alpha")
+    monkeypatch.setattr(
+        cli, "run_task", lambda task, run_idx, model: RunResult(FAKE_RECORD, [], "做完了")
+    )
+    called = []
+    monkeypatch.setattr(cli.judge, "main", lambda argv: called.append(argv))
+
+    assert main(["--tasks", str(tmp_path / "taskroot"), "--out", str(tmp_path / "out")]) == 0
+
+    assert called == []
+    assert "n/a (needs judge)" in list((tmp_path / "out").glob("*/report.txt"))[0].read_text(
+        encoding="utf-8"
+    )
+
+
+def test_main_appends_the_analysis_when_asked(tmp_path, monkeypatch):
+    """一段 LLM 解读追加在报告末尾，而且它拿到的是**渲染好的报告文本**。"""
+    write_task(tmp_path / "taskroot", "alpha")
+    monkeypatch.setattr(
+        cli, "run_task", lambda task, run_idx, model: RunResult(FAKE_RECORD, [], "做完了")
+    )
+    seen = []
+    monkeypatch.setattr(
+        cli.analyze,
+        "section",
+        lambda report_text, model: (seen.append((report_text, model)), "=== AI 分析 ===\n看不出差别")[1],
+    )
+
+    out = tmp_path / "out"
+    assert main(["--tasks", str(tmp_path / "taskroot"), "--out", str(out), "--analyze", "kimi"]) == 0
+
+    text = list(out.glob("*/report.txt"))[0].read_text(encoding="utf-8")
+    assert "AI 分析" in text
+    assert seen[0][1] == "kimi"
+    assert "Agent Evaluation Report" in seen[0][0], "解读要读到渲染好的报告，不是裸记录"
+
+
+def test_main_does_not_analyze_by_default(tmp_path, monkeypatch):
+    """不传 `--analyze` 就一次都不解读 —— 默认行为不许变。"""
+    write_task(tmp_path / "taskroot", "alpha")
+    monkeypatch.setattr(
+        cli, "run_task", lambda task, run_idx, model: RunResult(FAKE_RECORD, [], "做完了")
+    )
+    called = []
+    monkeypatch.setattr(cli.analyze, "section", lambda *a: called.append(a))
+
+    assert main(["--tasks", str(tmp_path / "taskroot"), "--out", str(tmp_path / "out")]) == 0
+
+    assert called == []
+    assert "AI 分析" not in list((tmp_path / "out").glob("*/report.txt"))[0].read_text(
+        encoding="utf-8"
+    )
 
 
 def test_main_returns_1_when_there_are_no_tasks(tmp_path, capsys):

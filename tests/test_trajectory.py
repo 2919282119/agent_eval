@@ -274,3 +274,63 @@ def test_final_answer_ignores_content_it_cannot_read():
     messages = [user(), assistant(content=42)]
 
     assert build(messages, LlmStats()).final_answer == ""
+
+
+# ---------- 工具结果正文（给 judge 用的）----------
+
+
+def test_call_carries_the_tool_result_text():
+    """结果正文要进 sidecar —— judge 判 groundedness（回答有没有依据）全靠它。"""
+    messages = [
+        user(),
+        assistant(("c1", "read_file", '{"path": "a.py"}')),
+        tool("c1", json.dumps("def average(xs): ...")),
+    ]
+
+    assert build(messages, LlmStats()).calls[0].result == "def average(xs): ..."
+
+
+def test_tool_result_is_truncated():
+    """长结果要截断（`trajectory._RESULT_LIMIT` = 500）。
+
+    不截的话 sidecar 会被撑爆 —— 一次 read_file 就是几万字符。
+    """
+    messages = [
+        user(),
+        assistant(("c1", "read_file", '{"path": "a.py"}')),
+        tool("c1", json.dumps("x" * 5000)),
+    ]
+
+    assert len(build(messages, LlmStats()).calls[0].result) == 500
+
+
+def test_dict_result_is_kept_as_readable_json():
+    """bash 的结果是 dict（`returncode` + `output`），正文要读得出来。"""
+    messages = [
+        user(),
+        assistant(("c1", "bash", '{"command": "pytest -q"}')),
+        tool("c1", json.dumps({"returncode": 0, "output": "2 passed"})),
+    ]
+
+    assert "2 passed" in build(messages, LlmStats()).calls[0].result
+
+
+def test_failed_call_still_carries_the_error_text():
+    """失败也留正文 —— 错误消息本身就是「agent 当时看到了什么」的一部分。"""
+    messages = [
+        user(),
+        assistant(("c1", "read_file", '{"path": "nope.py"}')),
+        tool("c1", json.dumps("文件不存在: nope.py")),
+    ]
+
+    call = build(messages, LlmStats()).calls[0]
+
+    assert call.ok is False
+    assert call.result == "文件不存在: nope.py"
+
+
+def test_interrupted_call_has_no_result_text():
+    """轨迹中断的那次调用没有结果 —— 正文是空串，不是 None。"""
+    messages = [assistant(("c1", "bash", '{"command": "sleep 999"}'))]
+
+    assert build(messages, LlmStats()).calls[0].result == ""
