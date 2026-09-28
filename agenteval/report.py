@@ -51,6 +51,9 @@ def summarize(records) -> dict:
         "errors": len(records) - len(valid),
         "k": k,
         "model": _models(records),
+        # 基线对比要核对的东西。放这里而不是 diff 里，是为了让「两边是不是同一套
+        # 实验条件」成为一个能被测试断言的事实，而不是一段临时比较的代码。
+        "identity": _identity(records),
         "dimensions": {name: _mean_dimension(valid, name) for name, _ in DIMENSIONS},
         # 条件效率：只在成功的 run 上统计，否则「失败得快」会被算成高效
         "efficiency": {
@@ -157,6 +160,72 @@ def _group_by_task(records) -> dict:
     for record in records:
         groups.setdefault(record["task_id"], []).append(record)
     return groups
+
+
+def _identity(records) -> dict:
+    """一次评估的「身份」：跑了哪些题、用的哪个模型、哪个 provider 模型、哪个代码版本。
+
+    全是集合 —— 一次评估里这些应当各自收敛成一个值；出现多个本身就是异常信号，
+    对比时会体现在 `_baseline_conflicts` 的措辞里（用 `/` 并列）。
+    """
+    return {
+        "task_ids": sorted({r["task_id"] for r in records}),
+        "models": sorted({r["model"] for r in records if r.get("model")}),
+        "models_actual": sorted(
+            {r["model_actual"] for r in records if r.get("model_actual")}
+        ),
+        "agent_versions": sorted(
+            {r["agent_version"] for r in records if r.get("agent_version")}
+        ),
+    }
+
+
+def _baseline_conflicts(current, base) -> tuple[list[str], list[str]]:
+    """比对两边的实验条件，返回 `(致命, 警告)`。
+
+    **致命** = 数字根本不能相减，必须拒绝出 diff。判据只有一条：分母不一样，
+    或者比的根本不是同一个被测对象。
+
+        - 任务集不同 → 聚合值是两组不同题的平均，相减没有意义
+        - 模型不同 → 比的是模型，不是 miniCC 版本
+
+    **警告** = 数字形式上可比，但读者必须知道的前提被破坏了：
+
+        - `agent_version` 相同 → 这是同一版本跟自己比，diff 里剩下的基本只有噪声
+        - `model_actual` 变了 → provider 可能在两轮之间静默升级了模型
+        - `k` 不同 → 观测次数不同，两侧精度不对等
+
+    跟 `feat.md` 里 Jev 的 `questions_hash` 是同一条原则：条件不一致就拒绝出 diff。
+    """
+    fatal, warn = [], []
+    now, old = current["identity"], base["identity"]
+
+    if now["task_ids"] != old["task_ids"]:
+        extra = len(set(now["task_ids"]) - set(old["task_ids"]))
+        missing = len(set(old["task_ids"]) - set(now["task_ids"]))
+        fatal.append(f"任务集不一致（这次多 {extra} 道、基线多 {missing} 道），聚合值不能相减")
+    if now["models"] != old["models"]:
+        fatal.append(f"模型不一致（{_join(old['models'])} → {_join(now['models'])}），比的是模型不是版本")
+    if now["models_actual"] != old["models_actual"]:
+        warn.append(
+            f"model_actual 变了（{_join(old['models_actual'])} → "
+            f"{_join(now['models_actual'])}），provider 可能在两轮之间静默升级了模型"
+        )
+    if now["agent_versions"] and now["agent_versions"] == old["agent_versions"]:
+        warn.append(
+            f"两边 agent_version 相同（{_join(now['agent_versions'])}），"
+            "这是同一版本跟自己比，diff 里剩下的基本只有噪声"
+        )
+    if current["k"] != base["k"]:
+        warn.append(
+            f"k 不一致（{base['k'] or '?'} → {current['k'] or '?'}），两侧精度不对等"
+        )
+
+    return fatal, warn
+
+
+def _join(values) -> str:
+    return "/".join(values) if values else "?"
 
 
 def _uniform_k(records) -> int | None:
@@ -289,7 +358,20 @@ def _dimension_cell(name, value, summary, label) -> str:
 
 
 def _render_diff(current, base, baseline_runs) -> list[str]:
-    lines = ["", f"Baseline Diff  (baseline: {baseline_runs} runs)", "  Overall"]
+    lines = ["", f"Baseline Diff  (baseline: {baseline_runs} runs)"]
+
+    # 一致性检查先于一切数字。`--baseline` 不替调用者保证两边实验条件一致，
+    # 所以这里必须自己核 —— 条件不一致时还把 diff 印出来，比不印危险得多：
+    # 读者会把「两组不同题的平均值之差」当成版本差异。
+    fatal, warn = _baseline_conflicts(current, base)
+    for message in warn:
+        lines.append(f"  注意：{message}")
+    if fatal:
+        lines.append("  拒绝出 diff —— 两边的实验条件不一致，数字相减没有意义：")
+        lines.extend(f"    · {message}" for message in fatal)
+        return lines
+
+    lines.append("  Overall")
     # 任一侧只有单次观测时，所有数值对比都不可信（见 _SINGLE_RUN_NOTE）。
     # 这里必须跟 Overall 段一个口径 —— 否则那边说「跳过」，这边却把 13 倍的
     # token 噪声印出来，等于自己打自己脸。

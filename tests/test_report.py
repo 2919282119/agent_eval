@@ -24,6 +24,8 @@ def make_record(
     latency_ms=14200,
     failures=(),
     model="kimi",
+    agent_version="abc1234",
+    model_actual="kimi-k2.6",
     tools_used=("read_file", "edit_file"),
     max_usage_ratio=0.02,
     compactions=0,
@@ -31,9 +33,9 @@ def make_record(
     return {
         "task_id": task_id,
         "run_id": run_id,
-        "agent_version": "abc1234",
+        "agent_version": agent_version,
         "model": model,
-        "model_actual": "kimi-k2.6",
+        "model_actual": model_actual,
         "first_action": first_action,
         "tools_used": list(tools_used),
         "max_usage_ratio": max_usage_ratio,
@@ -390,6 +392,81 @@ def test_diff_shows_efficiency_delta_when_k_is_3():
     diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
 
     assert "Avg tool calls   4.0 → 8.0" in diff_section
+
+
+def test_diff_stays_quiet_for_a_proper_version_comparison():
+    """agent_version 不同、其余条件一致 —— 这才是一次正常的版本对比。"""
+    current = [
+        make_record(task_id="a", run_id=f"r{i}", agent_version="new", tool_calls=8)
+        for i in range(3)
+    ]
+    baseline = [
+        make_record(task_id="a", run_id=f"r{i}", agent_version="old", tool_calls=4)
+        for i in range(3)
+    ]
+
+    diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
+
+    assert "拒绝出 diff" not in diff_section
+    assert "注意" not in diff_section
+    assert "Avg tool calls   4.0 → 8.0" in diff_section
+
+
+# ---------- baseline 一致性检查 ----------
+
+
+def test_diff_refuses_when_task_sets_differ():
+    """两边题不一样时，聚合值是两组不同题的平均 —— 相减没有意义，必须拒绝。"""
+    current = [make_record(task_id="a"), make_record(task_id="b")]
+    baseline = [make_record(task_id="a"), make_record(task_id="c")]
+
+    diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
+
+    assert "拒绝出 diff" in diff_section
+    assert "任务集不一致" in diff_section
+    assert "Task Success" not in diff_section
+
+
+def test_diff_refuses_when_models_differ():
+    """模型不同时比的是模型，不是 miniCC 版本。"""
+    current = [make_record(task_id="a", model="deepseek")]
+    baseline = [make_record(task_id="a", model="kimi")]
+
+    diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
+
+    assert "拒绝出 diff" in diff_section
+    assert "模型不一致" in diff_section
+
+
+def test_diff_warns_when_agent_version_is_identical():
+    """同一版本跟自己比：diff 里剩下的基本只有噪声。警告，但不拒绝。"""
+    current = [make_record(task_id="a", agent_version="same")]
+    baseline = [make_record(task_id="a", agent_version="same")]
+
+    diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
+
+    assert "agent_version 相同" in diff_section
+    assert "Task Success" in diff_section
+
+
+def test_diff_warns_when_model_actual_changed():
+    """请求的模型名没变、provider 实际给的不一样 → 可能被静默升级了。"""
+    current = [make_record(task_id="a", model_actual="kimi-k2.6")]
+    baseline = [make_record(task_id="a", model_actual="kimi-k2.5")]
+
+    diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
+
+    assert "model_actual 变了" in diff_section
+    assert "Task Success" in diff_section
+
+
+def test_diff_warns_when_k_differs():
+    current = [make_record(task_id="a", run_id=f"r{i}") for i in range(3)]
+    baseline = [make_record(task_id="a")]
+
+    diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
+
+    assert "k 不一致" in diff_section
 
 
 def test_load_baseline_reads_json_files(tmp_path):
