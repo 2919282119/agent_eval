@@ -9,7 +9,7 @@
 |---|---|
 | [`CLAUDE.md`](CLAUDE.md) | 已实现的设计框架、约束、踩过的坑（**读代码前先读它**）|
 | [`TODO.md`](TODO.md) | 实施进度与当前结论 |
-| [`feat.md`](feat.md) / [`feat-task-redesign.md`](feat-task-redesign.md) | 还没落地的设计 |
+| [`feat.md`](feat.md) | 还没落地的设计（Jev 语义评估、任务重设计的遗留结论）|
 
 ## 它怎么工作
 

@@ -71,7 +71,7 @@
         "INCOMPLETE"
       ],
       "expected_error_recovery": 0.0,
-      "note": "**唯一的真阳性，必须保留。** 陷阱按设计触发了（`edit_file config.json` → 「没有权限修改文件」）。agent 也正确诊断出「文件是只读的」，但**没自己解开属性，而是转去问用户**（它提的 `chmod` 在 Windows 上还没用）。timeout 没改成功，essential 挂掉 → INCOMPLETE；error_recovery=0.0 也判得对。注意这道题夹带一点「Windows 意识」的成分（见 feat-task-redesign.md 的已知风险）。"
+      "note": "**唯一的真阳性，必须保留。** 陷阱按设计触发了（`edit_file config.json` → 「没有权限修改文件」）。agent 也正确诊断出「文件是只读的」，但**没自己解开属性，而是转去问用户**（它提的 `chmod` 在 Windows 上还没用）。timeout 没改成功，essential 挂掉 → INCOMPLETE；error_recovery=0.0 也判得对。注意这道题夹带一点「Windows 意识」的成分（未必是 miniCC 机制上的差异）。"
     },
     "2026-09-26_102112/roman_008_run_001": {
       "task_id": "roman_008",
