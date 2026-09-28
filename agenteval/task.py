@@ -51,9 +51,29 @@ class Task:
 
 
 def load_task(task_dir) -> Task:
+    """读 `task.yaml`。**畸形文件要报错并指名是哪个文件** —— 它是手写输入。
+
+    空文件、只写了一行正文、`task_id: 007`（YAML 把前导零读成整数 7）…… 这些如果
+    留给下游 `data["instruction"]` 去撞，抛出来的是 `AttributeError: 'NoneType' ...`
+    或 `KeyError: 'instruction'`：不说哪个文件，也不说为什么。
+    """
     task_dir = Path(task_dir)
-    data = yaml.safe_load((task_dir / "task.yaml").read_text(encoding="utf-8"))
+    where = f"{task_dir}/task.yaml"
+    try:
+        data = yaml.safe_load((task_dir / "task.yaml").read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{where} 不是合法的 YAML：{exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"{where} 的顶层必须是 `键: 值`，实际是 {type(data).__name__}"
+            f"（空文件、或只写了一行正文都会这样）"
+        )
     _reject_mistyped_fields(task_dir, data)
+
+    for name in ("task_id", "instruction"):
+        value = data.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{where} 的 {name} 必须是非空字符串，实际是 {value!r}")
 
     return Task(
         task_id=data["task_id"],

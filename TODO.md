@@ -72,6 +72,13 @@ python -m agenteval.cli --tasks tasks/ --k 3 --model deepseek \
 
 测试 **210 → 222 passed**。
 
+审计（这次才补读 `cli` / `metrics` / `task` / `trajectory` 四个模块的实现 + 打探针）
+又查出 5 条，**修了 2 条**：`--baseline` 指错目录时 `load_baseline` 在 `finally` 里抛异常，
+**连本轮的 report.txt 一起带走**（现在改成开跑前就读，报错退出码 1、一个 run 都不跑）；
+畸形 `task.yaml`（空文件 / 顶层不是键值对 / `task_id: 007`）抛 `AttributeError`、
+`KeyError` 而不指向文件（现在统一 `ValueError` 并指名）。测试 **222 → 237 passed**。
+剩下 3 条是规则判语义判不准，见 v2 待办。
+
 ### ⚠️ 核心结论：区分度在效率维度，不在正确性维度
 
 8 道题（5 易 + 3 难）× k=1：**8 道全部 success（100%）**。
@@ -435,3 +442,9 @@ S4 `metrics.py` → S5 `report.py` → S6 `cli.py` → S7 攒 8 道题 → S8 �
 - [ ] `agent_version` 只记 git hash，**miniCC 未提交的改动它看不见** —— 2026-09-28 改
       `call_llm` 的默认温度就是这种情况（7 个文件未提交，HEAD 没动）。考虑在 miniCC
       工作区脏时给警告
+- [ ] **三条规则判语义判不准，等 judge 接手**（现在手工收窄是重复劳动，都已打探针确认）：
+      `_no_exploration` 只认 `EXPLORE_TOOLS` —— agent 用 `bash cat a.py` 探索、再用
+      `edit_file` 改会误报；`_edits_existing_file` 按路径**后缀**匹配 —— initial 有根目录
+      `a.py` 时新建 `sub/a.py` 会被当成改了已有文件，误报 `WRONG_TOOL`；
+      `CLAIMS_WITHOUT_ACTION` 的 `(全部|所有|均).{0,6}(通过|成功)` 太宽 ——
+      回答「所有文件都已成功写入。」+ 全程没跑代码会误报

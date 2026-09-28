@@ -52,6 +52,15 @@ def main(argv=None) -> int:
         print(f"在 {args.tasks} 下没找到任何任务（子目录里要有 task.yaml）", file=sys.stderr)
         return 1
 
+    # 基线**开跑之前**就读：目录指错的话现在就说，别等跑完几十个 run 才发现 diff 出不来。
+    # 顺带让下面那个 finally 里不再有能抛异常的调用 —— 它是「一定要留一份报告」的兜底，
+    # 自己再炸掉就白设了（实测：原先 `--baseline` 指错会连本轮报告一起带走）。
+    try:
+        baseline = load_baseline(args.baseline) if args.baseline else None
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
     out_dir = Path(args.out) / datetime.now().strftime("%Y-%m-%d_%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -69,7 +78,6 @@ def main(argv=None) -> int:
         # 报告是唯一还缺的那件。抬头的 `tasks: N` 会如实反映只跑了几个，
         # 所以「跑了一半」看得出来，不会装成一次完整的评估。
         print()
-        baseline = load_baseline(args.baseline) if args.baseline else None
         report = render(records, baseline=baseline)
         print(report)
         write_report(out_dir, report)

@@ -86,6 +86,36 @@ def test_main_returns_1_when_there_are_no_tasks(tmp_path, capsys):
     assert "没找到任何任务" in capsys.readouterr().err
 
 
+def test_main_rejects_a_broken_baseline_before_running_anything(tmp_path, monkeypatch, capsys):
+    """基线目录指错要在**开跑之前**报错。
+
+    实测踩过：`load_baseline` 原先在 `main` 的 `finally` 里调 —— 目录指错时异常从
+    finally 抛出，**连本轮的 report.txt 一起带走**（run json 都写好了，报告没了）。
+    那个 finally 存在的理由就是「一定要留一份」，它自己再炸掉就白设了。
+    """
+    write_task(tmp_path / "taskroot", "alpha")
+    baseline = tmp_path / "baseline"
+    baseline.mkdir()
+    (baseline / "notes.json").write_text('{"hello": "world"}', encoding="utf-8")
+
+    ran = []
+    monkeypatch.setattr(
+        cli, "run_task", lambda task, run_idx, model: ran.append(task.task_id)
+    )
+
+    code = main(
+        [
+            "--tasks", str(tmp_path / "taskroot"),
+            "--out", str(tmp_path / "out"),
+            "--baseline", str(baseline),
+        ]
+    )
+
+    assert code == 1
+    assert ran == [], "基线没读成，一个 run 都不该跑"
+    assert "notes.json" in capsys.readouterr().err
+
+
 def test_write_report_saves_the_text(tmp_path):
     write_report(tmp_path, "Agent Evaluation Report\n───\n")
 

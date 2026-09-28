@@ -132,6 +132,30 @@ def test_load_task_rejects_mistyped_fields(tmp_path):
         assert field in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    "yaml_src",
+    [
+        "",  # 空文件
+        "随便写点什么",  # 顶层不是键值对
+        "task_id: t\n",  # 缺 instruction
+        "instruction: 随便做点什么\n",  # 缺 task_id
+        "task_id: 007\ninstruction: 随便\n",  # YAML 把 007 读成整数 7
+        "task_id: [没关\ninstruction: 随便\n",  # YAML 语法错
+    ],
+)
+def test_load_task_reports_the_file_for_a_malformed_yaml(tmp_path, yaml_src):
+    """手写文件的畸形输入要**指名文件**，而不是抛 AttributeError / KeyError。
+
+    修改前：空文件 → `AttributeError: 'NoneType' object has no attribute 'get'`；
+    缺 instruction → `KeyError: 'instruction'`。两种都不说哪个文件、也不说为什么 ——
+    而 `_reject_mistyped_fields` 自己就假设了 `data` 是个 dict。
+    """
+    with pytest.raises(ValueError) as excinfo:
+        load_task(make_task_dir(tmp_path, yaml_src, VERIFY_MIXED))
+
+    assert "task.yaml" in str(excinfo.value)
+
+
 def test_check_rejects_unknown_weight():
     with pytest.raises(ValueError, match="非法的 weight"):
         Check("x", True, weight="critical")
