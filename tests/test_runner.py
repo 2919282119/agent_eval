@@ -1,3 +1,4 @@
+import inspect
 import os
 import shutil
 from pathlib import Path
@@ -212,3 +213,38 @@ def test_error_run_keeps_its_workspace_for_postmortem(tmp_path, monkeypatch):
         assert saved.is_dir(), "error run 的工作区被删了，现场就没了"
     finally:
         shutil.rmtree(saved, ignore_errors=True)
+
+
+def test_record_carries_the_temperature_minicc_actually_uses(tmp_path, monkeypatch):
+    """温度是实验条件，必须进记录 —— 而且不能硬编码。
+
+    eval **不设置**温度（`counting_call_llm` 原样转发），所以有效值就是 miniCC 的
+    默认值。这里跟 miniCC 的签名直接对，而不是跟 `temperature_default()` 对 ——
+    后者是自我印证，签名才是事实来源。
+    """
+    import agenteval.runner as runner
+
+    task = make_task(tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "drive_agent",
+        lambda instruction, workspace, model=None: AgentOutcome(
+            [], LlmStats(latency_ms=1)
+        ),
+    )
+
+    expected = inspect.signature(A.call_llm).parameters["temperature"].default
+    record = run_task(task, run_idx=1).record
+
+    assert record["temperature"] == expected
+
+
+def test_temperature_is_null_when_minicc_does_not_expose_it(monkeypatch):
+    """`call_llm` 又把温度写死时记 null —— 「无从得知」，不能编一个数字顶上。"""
+    import agenteval.runner as runner
+
+    monkeypatch.setattr(
+        A, "call_llm", lambda config, messages, tools=None: None
+    )
+
+    assert runner.temperature_default() is None

@@ -156,9 +156,23 @@ Failure Distribution  WRONG_TOOL 0.62   INEFFICIENT 0.25   CLAIMS_WITHOUT_ACTION
 | `roman_008` | 7 → 11 | 2.5 万 → **31.8 万（13 倍）** |
 | `update_call_sites_004` | 22 → 22 → 36 | 3.9 万 → 16.4 万 |
 
-根因：miniCC 的 `call_llm` 把 `temperature` 写死成 1，故意放大随机性。
+根因：miniCC 采样温度不为 0（表格里这批数据是 `call_llm` 写死 `temperature=1` 时跑的），
+随机性被放大。
 **已修**：保留数字但钉一句不可比的声明（单次观测本身是有效数据，藏掉反而丢信息），
 `--baseline` 的效率 delta 在任一侧 k=1 时直接跳过 —— delta 才是把噪声说成趋势的那个。
+
+**2026-09-28 温度变了**：miniCC 把 `temperature` 提取成参数，默认值 **0.1**（原先写死 1），
+且 agent 主循环不传这个参数 → **整条链路的默认行为都变了**。三件事跟上：
+
+1. eval 侧记录实际温度（`runner.temperature_default()` 现读 `call_llm` 签名，不硬编码）
+2. baseline 对比：只有任务集不一致才拒绝出 diff，其余条件差异（`model` / `temperature` /
+   `agent_version`）降级成警告。**试过「最多差一个变量」的硬约束，又撤了** —— 它保证的
+   是「可解释」不是「可信」，而瓶颈是噪声：只差一个变量时 delta 也可能整个是噪声
+   （逐题 CV 中位数 29%）。真想解决得让报告拿 delta 跟噪声底比，不是加条件校验
+3. 报告头部印 `temp:` —— 温度是实验条件，藏进 run json 就没人看了
+
+⚠️ 上面表格里「3 倍 / 13 倍」是 **temp=1 时代**的数，不适用于 0.1 以后的 run；
+`pass@3 == pass^3` 那类「稳定失败」结论同理 —— 它们建立在重复跑有散布之上。
 
 ### 问题 3（已修）：失败标签大部分是错的，而且错得很隐蔽
 
@@ -418,5 +432,6 @@ S4 `metrics.py` → S5 `report.py` → S6 `cli.py` → S7 攒 8 道题 → S8 �
       同样成功但重试路径完全不同，说明没真会。要做需先攒多次跑的轨迹数据来定阈值
 - [ ] 离线 / mock 模式：现在每次 run 都要真实调 API，CI 里跑不了，且历史结果的可比性
       持续受 provider 静默升级威胁
-- [ ] `temperature` 可配置：`call_llm` 硬编码了 1，方差拉满。要在不改 miniCC 的前提下做，
-      只能靠已存在的 `call_llm` 包装层注入
+- [ ] `agent_version` 只记 git hash，**miniCC 未提交的改动它看不见** —— 2026-09-28 改
+      `call_llm` 的默认温度就是这种情况（7 个文件未提交，HEAD 没动）。考虑在 miniCC
+      工作区脏时给警告

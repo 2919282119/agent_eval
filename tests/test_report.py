@@ -31,8 +31,9 @@ def make_record(
     tools_used=("read_file", "edit_file"),
     max_usage_ratio=0.02,
     compactions=0,
+    temperature=0.1,
 ):
-    return {
+    record = {
         "task_id": task_id,
         "run_id": run_id,
         "agent_version": agent_version,
@@ -60,6 +61,10 @@ def make_record(
         },
         "failures": list(failures),
     }
+    # None = 老记录里压根没有这个字段（temperature 是后加的）
+    if temperature is not None:
+        record["temperature"] = temperature
+    return record
 
 
 def make_error_record(task_id="t1", run_id="run_002"):
@@ -412,8 +417,12 @@ def test_diff_shows_efficiency_delta_when_k_is_3():
     assert "Avg tool calls   4.0 → 8.0" in diff_section
 
 
-def test_diff_stays_quiet_for_a_proper_version_comparison():
-    """agent_version 不同、其余条件一致 —— 这才是一次正常的版本对比。"""
+def test_diff_is_quiet_for_a_proper_version_comparison():
+    """agent_version 不同、其余条件一致 —— 正常的版本对比：不拒绝，也不出任何提示。
+
+    版本不同是这件事的**常态**，提示它只会给每份 diff 添一行噪音；反倒是「版本相同」
+    值得说一句（见 test_diff_warns_when_agent_version_is_identical）。
+    """
     current = [
         make_record(task_id="a", run_id=f"r{i}", agent_version="new", tool_calls=8)
         for i in range(3)
@@ -445,15 +454,18 @@ def test_diff_refuses_when_task_sets_differ():
     assert "Task Success" not in diff_section
 
 
-def test_diff_refuses_when_models_differ():
-    """模型不同时比的是模型，不是 miniCC 版本。"""
-    current = [make_record(task_id="a", model="deepseek")]
-    baseline = [make_record(task_id="a", model="kimi")]
+def test_diff_warns_but_does_not_refuse_when_model_changes():
+    """换模型不再拒绝，只出一行提示 —— 拒绝拦不住真正的问题（噪声）。"""
+    current = [make_record(task_id="a", model="deepseek", model_actual="deepseek-flash")]
+    baseline = [make_record(task_id="a", model="kimi", model_actual="kimi-k2.6")]
 
     diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
 
-    assert "拒绝出 diff" in diff_section
-    assert "模型不一致" in diff_section
+    assert "拒绝出 diff" not in diff_section
+    assert "model 不一致（kimi → deepseek）" in diff_section
+    assert "Task Success" in diff_section
+    # model 换了，model_actual 跟着变是**预期的** —— 不该再警告「provider 静默升级」
+    assert "model_actual 变了" not in diff_section
 
 
 def test_diff_warns_when_agent_version_is_identical():
@@ -485,6 +497,59 @@ def test_diff_warns_when_k_differs():
     diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
 
     assert "k 不一致" in diff_section
+
+
+def test_diff_warns_but_does_not_refuse_when_temperature_changes():
+    current = [make_record(task_id="a", temperature=0.1)]
+    baseline = [make_record(task_id="a", temperature=1)]
+
+    diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
+
+    assert "拒绝出 diff" not in diff_section
+    assert "temperature 不一致（1 → 0.1）" in diff_section
+    assert "Task Success" in diff_section
+
+
+def test_diff_warns_about_every_changed_condition_at_once():
+    """同时变好几项也不再拒绝 —— 逐项列清楚，判断交给读者。"""
+    current = [make_record(task_id="a", temperature=0.1, model_actual="new-flash")]
+    baseline = [make_record(task_id="a", temperature=1, model_actual="old-flash")]
+
+    diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
+
+    assert "拒绝出 diff" not in diff_section
+    assert "temperature 不一致（1 → 0.1）" in diff_section
+    assert "model_actual 变了" in diff_section
+    assert "Task Success" in diff_section
+
+
+def test_diff_warns_when_one_side_has_no_temperature():
+    """老记录里没有 temperature 字段 —— 核不出来，警告但不拒绝（跟 Python 版本同理）。"""
+    current = [make_record(task_id="a", temperature=0.1)]
+    baseline = [make_record(task_id="a", temperature=None)]
+
+    diff_section = render(current, baseline=baseline).split("Baseline Diff")[1]
+
+    assert "无法确认两轮温度一致" in diff_section
+    assert "拒绝出 diff" not in diff_section
+    assert "Task Success" in diff_section
+
+
+def test_diff_stays_quiet_when_temperatures_match():
+    current = [make_record(task_id="a", temperature=0.1)]
+    baseline = [make_record(task_id="a", temperature=0.1)]
+
+    assert "温度" not in render(current, baseline=baseline)
+
+
+def test_render_shows_the_temperature_in_the_header():
+    """温度是实验条件，得跟 model 一样摆在报告头上 —— 只写进 run json 就没人看了。"""
+    assert "temp: 0.1" in render([make_record()])
+
+
+def test_render_marks_an_unknown_temperature():
+    """老记录没有这个字段时要显式标成未知，不能悄悄印个空。"""
+    assert "temp: ?" in render([make_record(temperature=None)])
 
 
 def test_load_baseline_reads_json_files(tmp_path):

@@ -5,6 +5,7 @@
 """
 
 import functools
+import inspect
 import os
 import shutil
 import stat
@@ -66,6 +67,22 @@ def agent_version() -> str:
     except OSError:
         return "unknown"
     return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+
+def temperature_default() -> float | None:
+    """miniCC 这轮实际用的采样温度。
+
+    eval **不设置**它 —— `counting_call_llm` 原样转发、不带 temperature，所以有效值
+    就是 miniCC 的默认值，只能从签名上问。硬编码成某个数字的话，miniCC 哪天改了默认
+    值，记录里就留下一个错的温度，比不记录更坏。
+
+    签名上没有这个参数（又被写死了）时返回 `None`：「无从得知」，不是「温度是 null」。
+
+    **必须在 patch 之外调用**（`_run_result` 就是在 `drive_agent` 返回之后调的）——
+    patch 期间 `A.call_llm` 是那个包装函数，签名里当然没有 temperature。
+    """
+    parameter = inspect.signature(A.call_llm).parameters.get("temperature")
+    return parameter.default if parameter is not None else None
 
 
 @dataclass
@@ -269,6 +286,9 @@ def _run_result(
             "agent_version": agent_version(),
             "model": model,
             "model_actual": outcome.stats.model_actual,
+            # 采样温度。eval 不设置它，记的是 miniCC 的默认值 —— 但它是**实验条件**，
+            # 两轮温度不同就没法比。宁可记 null（无从得知）也不能让它隐形。
+            "temperature": temperature_default(),
             "first_action": traj.first_action,
             # 行为指纹：first_action 的「一般化形式」，让报告不必读 sidecar
             # 就知道它用没用 run_subagent

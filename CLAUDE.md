@@ -113,7 +113,11 @@ minor = 1
 <task>_<run>.calls.json
 ```
 
-主记录包含评分、失败标签、`agent_version`、`model_actual`、`first_action`、`tools_used`、`max_usage_ratio` 和 `compactions`。sidecar 保存逐次工具调用和 `final_answer`，用于事后核对规则；`load_baseline()` 必须跳过 sidecar。
+主记录包含评分、失败标签、`agent_version`、`model_actual`、`temperature`、`first_action`、`tools_used`、`max_usage_ratio` 和 `compactions`。sidecar 保存逐次工具调用和 `final_answer`，用于事后核对规则；`load_baseline()` 必须跳过 sidecar。
+
+`temperature` 是**实验条件**：eval 不设置它（`counting_call_llm` 原样转发），值来自
+`call_llm` 签名的默认值，由 `runner.temperature_default()` 现读 —— 不硬编码，否则
+miniCC 改了默认值记录里会留下一个错的温度。签名里没有这个参数时记 `null`。
 
 `status` 只能是：
 
@@ -169,8 +173,14 @@ python -m agenteval.cli --tasks tasks/ --k 3 --model deepseek --baseline runs/<o
 
 `--out` 默认是 `runs`。k=1 的效率数字只能视为单次观测，不能用于跨轮次效率结论。
 baseline 对比会自动校验**能从记录里核出来的**条件（任务集 / 模型 / `model_actual` /
-`agent_version` / k），**核不出来的一律靠人**：Python 版本、依赖、shell、操作系统
-这些没进记录，调用者必须自己保证两轮一致。
+`agent_version` / `temperature` / k），**核不出来的一律靠人**：Python 版本、依赖、shell、
+操作系统这些没进记录，调用者必须自己保证两轮一致。
+
+只有**任务集**不一致会拒绝出 diff —— 它是秤不是变量，两组不同题的平均相减没有意义。
+`model` / `temperature` / `model_actual` / `k` 的差异一律只警告（`agent_version` 不同是
+版本对比的常态，不提示；相同才提示一句）。理由：这个框架的瓶颈是**噪声**（逐题工具调用
+CV 中位数 29%），不是变量太多，把实验条件的变化列清楚比拦下来有用；而且能核的只有进了
+记录的字段，没记录的本就拦不住。
 
 ## 明确不在 v1
 

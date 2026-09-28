@@ -36,10 +36,11 @@ RULE = "─" * 28
 # 混进来的杂 json —— 缺了它们在 `summarize` 里会 KeyError，而报错完全不指向文件。
 _RECORD_REQUIRED = ("task_id", "status", "evaluation")
 
-# k=1 时效率数字只是**单次观测**，而 miniCC 的 call_llm 硬编码了 temperature=1，
-# 方差拉满 —— 同一道题跑两次可以差 3 倍工具调用、13 倍 token。拿单次跑出来的数
-# 跟别的轮次比，比的是噪声不是趋势。报告要给结论，就得先说清这一点；
-# baseline diff 里的 delta 同理，k=1 时直接跳过不输出。
+# k=1 时效率数字只是**单次观测**，而 miniCC 的采样温度不为 0（`call_llm` 当前默认
+# 0.1，由 miniCC 决定，eval 不设置）—— 同一道题跑两次可以差好几倍（temperature=1
+# 那批实测差 3 倍工具调用、13 倍 token）。拿单次跑出来的数跟别的轮次比，比的是噪声
+# 不是趋势。报告要给结论，就得先说清这一点；baseline diff 里的 delta 同理，k=1 时
+# 直接跳过不输出。
 _SINGLE_RUN_NOTE = "k=1 只有单次观测，数字含大随机波动，勿跨轮次比较"
 
 
@@ -79,7 +80,9 @@ def render(records, baseline=None) -> str:
     summary = summarize(records)
     lines = [
         f"Agent Evaluation Report        tasks: {summary['tasks']}   "
-        f"k: {summary['k'] or '?'}   model: {summary['model']}",
+        f"k: {summary['k'] or '?'}   model: {summary['model']}   "
+        # 温度是实验条件，得跟 model 一样摆在头上 —— 藏进 run json 里就没人看了
+        f"temp: {_join(summary['identity']['temperatures'])}",
         RULE,
     ]
 
@@ -206,25 +209,32 @@ def _identity(records) -> dict:
         "agent_versions": sorted(
             {r["agent_version"] for r in records if r.get("agent_version")}
         ),
+        "temperatures": sorted(
+            {r["temperature"] for r in records if r.get("temperature") is not None}
+        ),
     }
 
 
 def _baseline_conflicts(current, base) -> tuple[list[str], list[str]]:
     """比对两边的实验条件，返回 `(致命, 警告)`。
 
-    **致命** = 数字根本不能相减，必须拒绝出 diff。判据只有一条：分母不一样，
-    或者比的根本不是同一个被测对象。
+    **只有任务集是致命的** —— 它不是变量，是秤本身：题目不一样时聚合值是两组不同题
+    的平均，差几项都相减没有意义。
 
-        - 任务集不同 → 聚合值是两组不同题的平均，相减没有意义
-        - 模型不同 → 比的是模型，不是 miniCC 版本
+    其余条件差异**一律只警告**：照出数字，但把变化摆到读者面前。不拒绝的理由是
+    「拒绝」拦不住真正的问题 —— 这个框架的瓶颈是**噪声**（逐题工具调用 CV 中位数
+    29%），不是指标太多；而且能核的只有**进了记录**的字段，没进记录的（依赖 / shell /
+    OS / miniCC 未提交的改动）本来就拦不住。列清楚比拦下来有用。
 
-    **警告** = 数字形式上可比，但读者必须知道的前提被破坏了：
-
-        - `agent_version` 相同 → 这是同一版本跟自己比，diff 里剩下的基本只有噪声
+        - `model` / `temperature` 变了 → 告诉读者比的是什么
+        - `agent_version` 相同 → 同一版本跟自己比，diff 里剩下的基本只有噪声
+          （不同是常态，不提示）
         - `model_actual` 变了 → provider 可能在两轮之间静默升级了模型
+          （`model` 也变了的话这是预期的，不再重复警告）
         - `k` 不同 → 观测次数不同，两侧精度不对等
+        - 缺 `temperature` 字段 → 老记录，核不出来
 
-    跟 `feat.md` 里 Jev 的 `questions_hash` 是同一条原则：条件不一致就拒绝出 diff。
+    跟 `feat.md` 里 Jev 的 `questions_hash` 是同一条原则：条件不一致就说清楚。
     """
     fatal, warn = [], []
     now, old = current["identity"], base["identity"]
@@ -233,17 +243,32 @@ def _baseline_conflicts(current, base) -> tuple[list[str], list[str]]:
         extra = len(set(now["task_ids"]) - set(old["task_ids"]))
         missing = len(set(old["task_ids"]) - set(now["task_ids"]))
         fatal.append(f"任务集不一致（这次多 {extra} 道、基线多 {missing} 道），聚合值不能相减")
+
     if now["models"] != old["models"]:
-        fatal.append(f"模型不一致（{_join(old['models'])} → {_join(now['models'])}），比的是模型不是版本")
-    if now["models_actual"] != old["models_actual"]:
+        warn.append(f"model 不一致（{_join(old['models'])} → {_join(now['models'])}）")
+    if now["temperatures"] and old["temperatures"]:
+        if now["temperatures"] != old["temperatures"]:
+            warn.append(
+                f"temperature 不一致（{_join(old['temperatures'])} → "
+                f"{_join(now['temperatures'])}）"
+            )
+    elif now["temperatures"] != old["temperatures"]:
         warn.append(
-            f"model_actual 变了（{_join(old['models_actual'])} → "
-            f"{_join(now['models_actual'])}），provider 可能在两轮之间静默升级了模型"
+            "无法确认两轮温度一致：有一边的记录里没有 temperature 字段"
+            f"（{_join(old['temperatures'])} → {_join(now['temperatures'])}）"
         )
+    # 只报「相同」这一种。正常版本对比里 agent_version 本来就该不同，再提示一遍纯属噪音；
+    # 相同才需要说 —— 那是同版本跟自己比，diff 里剩下的基本只有噪声。
     if now["agent_versions"] and now["agent_versions"] == old["agent_versions"]:
         warn.append(
             f"两边 agent_version 相同（{_join(now['agent_versions'])}），"
             "这是同一版本跟自己比，diff 里剩下的基本只有噪声"
+        )
+    # model 换了的话 model_actual 跟着变是**预期的**，不再重复警告
+    if now["models"] == old["models"] and now["models_actual"] != old["models_actual"]:
+        warn.append(
+            f"model_actual 变了（{_join(old['models_actual'])} → "
+            f"{_join(now['models_actual'])}），provider 可能在两轮之间静默升级了模型"
         )
     if current["k"] != base["k"]:
         warn.append(
@@ -254,7 +279,7 @@ def _baseline_conflicts(current, base) -> tuple[list[str], list[str]]:
 
 
 def _join(values) -> str:
-    return "/".join(values) if values else "?"
+    return "/".join(str(value) for value in values) if values else "?"
 
 
 def _uniform_k(records) -> int | None:
