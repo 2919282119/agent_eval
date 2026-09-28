@@ -96,6 +96,17 @@ def test_task_success_requires_all_essential_passing():
     ] is True
 
 
+def test_task_success_is_false_when_the_task_has_no_essential_check():
+    """没有关键项的题**永远不算成功** —— fail-closed，不是漏写。
+
+    没有关键项就没法判定「做完了」，报成功等于放水。题目写漏 essential 属于出题错误，
+    由 `tests/test_tasks.py` 的参考修复体检拦住（要求未修复时至少挂一条 essential）。
+    """
+    result = score(traj_from([OK_READ, OK_EDIT]), [important(True), minor(True)])
+
+    assert result.evaluation["task_success"] is False
+
+
 def test_correctness_covers_important_too():
     """只算 essential 的话 correctness 会恒等于 task_success，这个用例就是防它退化。"""
     result = score(traj_from([OK_READ]), [essential(True), important(False)])
@@ -216,6 +227,21 @@ def test_error_recovery_gives_up():
     assert score(traj, [essential(True)]).evaluation["error_recovery"] == 0.0
 
 
+def test_error_recovery_zero_when_nothing_after_the_failure_works():
+    """三档里的最低档：出错之后又试了几次，全都没成。
+
+    跟「出错后直接放弃」（后面一次调用都没有）是两条不同的路径，之前只测了后者。
+    """
+    traj = traj_from(
+        [
+            ("read_file", {"path": "a.py"}, {"error": "文件不存在"}),
+            ("grep", {"pattern": "x"}, {"error": "命令执行异常"}),
+        ]
+    )
+
+    assert score(traj, [essential(True)]).evaluation["error_recovery"] == 0.0
+
+
 def test_error_recovery_ignores_bash_exit_code():
     """bash 的非 0 退出码**不算工具故障**。
 
@@ -310,6 +336,31 @@ def test_inefficient_ignores_reads_separated_by_a_change():
             OK_READ,
         ]
     )
+
+    assert "INEFFICIENT" not in score(traj, [essential(True)]).failures
+
+
+def test_inefficient_counts_repeats_among_read_only_calls():
+    """只读类工具之间重复也算 —— 中间没人动过文件，读到的就是同一份内容。"""
+    other = ("read_file", {"path": "b.py"}, "内容")
+    traj = traj_from([OK_READ, other, OK_READ, other, OK_READ])
+
+    assert "INEFFICIENT" in score(traj, [essential(True)]).failures
+
+
+def test_inefficient_ignores_reads_interleaved_with_a_bash_rewrite():
+    """实测踩过的误报：agent 用 bash 重写同一个文件之后再读。
+
+    `encoding_trap_010` 那轮三次 `read_file _dump.txt` 中间夹着两次
+    `python -c "open('_dump.txt','w')..."` —— 它读的是三个**不同版本**的文件。
+    只认 `edit_file` / `write_file` 会把这种判成盲目重复。
+    """
+    rewrite = (
+        "bash",
+        {"command": "python -c \"open('a.py','w').write('new')\""},
+        {"returncode": 0},
+    )
+    traj = traj_from([OK_READ, rewrite, OK_READ, rewrite, OK_READ])
 
     assert "INEFFICIENT" not in score(traj, [essential(True)]).failures
 

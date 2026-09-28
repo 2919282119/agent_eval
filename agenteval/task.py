@@ -53,6 +53,7 @@ class Task:
 def load_task(task_dir) -> Task:
     task_dir = Path(task_dir)
     data = yaml.safe_load((task_dir / "task.yaml").read_text(encoding="utf-8"))
+    _reject_mistyped_fields(task_dir, data)
 
     return Task(
         task_id=data["task_id"],
@@ -64,6 +65,40 @@ def load_task(task_dir) -> Task:
         max_tool_calls=data.get("max_tool_calls"),
         retired=bool(data.get("retired", False)),
     )
+
+
+def _reject_mistyped_fields(task_dir, data) -> None:
+    """`task.yaml` 是手写文件，属于**系统边界** —— 只在这里做类型校验。
+
+    这几个字段类型错了会**静默变形**，比直接报错危险得多：
+
+        forbidden_tools: read_file     → list("read_file") 变成 10 个字母，
+                                         规则悄悄失效
+        max_tool_calls: "15"           → 算分时 `len(calls) > "15"`
+                                         TypeError
+        retired: "false"               → bool("false") 是 **True**，
+                                         题就悄悄从默认任务集里消失了
+    """
+    where = f"{task_dir}/task.yaml"
+    for name in ("expected_tools", "forbidden_tools"):
+        value = data.get(name)
+        if value is not None and not isinstance(value, list):
+            raise ValueError(
+                f"{where} 的 {name} 必须是列表，实际是 {value!r}"
+                f"（写成一行字符串会被当成 {len(str(value))} 个字符）"
+            )
+    max_calls = data.get("max_tool_calls")
+    if max_calls is not None and (isinstance(max_calls, bool) or not isinstance(max_calls, int)):
+        raise ValueError(
+            f"{where} 的 max_tool_calls 必须是整数，实际是 {max_calls!r}"
+            f"（加引号就成了字符串，比较时会 TypeError）"
+        )
+    retired = data.get("retired")
+    if retired is not None and not isinstance(retired, bool):
+        raise ValueError(
+            f"{where} 的 retired 必须是 true / false，实际是 {retired!r}"
+            f"（带引号的 \"false\" 是真值，题会悄悄退役）"
+        )
 
 
 def load_workspace_module(workspace, filename, name="under_test"):

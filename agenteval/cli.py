@@ -56,20 +56,24 @@ def main(argv=None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     records = []
-    for task in tasks:
-        for run_idx in range(1, args.k + 1):
-            print(f"[{task.task_id}] run {run_idx}/{args.k} ...", flush=True)
-            result = run_task(task, run_idx, args.model)
-            write_result(out_dir, result)
-            print(f"    → {summarize_progress(result.record)}", flush=True)
-            records.append(result.record)
-
-    print()
-    baseline = load_baseline(args.baseline) if args.baseline else None
-    report = render(records, baseline=baseline)
-    print(report)
-    write_report(out_dir, report)
-    print(f"\n结果已写入 {out_dir}（报告在 report.txt）")
+    try:
+        for task in tasks:
+            for run_idx in range(1, args.k + 1):
+                print(f"[{task.task_id}] run {run_idx}/{args.k} ...", flush=True)
+                result = run_task(task, run_idx, args.model)
+                write_result(out_dir, result)
+                print(f"    → {summarize_progress(result.record)}", flush=True)
+                records.append(result.record)
+    finally:
+        # 被打断（Ctrl-C）或中途崩了也要留一份报告：run json 是一个个落盘的，
+        # 报告是唯一还缺的那件。抬头的 `tasks: N` 会如实反映只跑了几个，
+        # 所以「跑了一半」看得出来，不会装成一次完整的评估。
+        print()
+        baseline = load_baseline(args.baseline) if args.baseline else None
+        report = render(records, baseline=baseline)
+        print(report)
+        write_report(out_dir, report)
+        print(f"\n结果已写入 {out_dir}（报告在 report.txt）")
     return 0
 
 

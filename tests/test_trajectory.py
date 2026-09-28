@@ -233,3 +233,44 @@ def test_final_answer_is_empty_without_text():
     messages = [user(), assistant(("c1", "bash", '{"command": "sleep 999"}'))]
 
     assert build(messages, LlmStats()).final_answer == ""
+
+
+def test_non_json_tool_result_is_treated_as_success():
+    """**没有护栏的假设**：miniCC 先把工具结果 `json.dumps` 再塞进 tool 消息
+    （`agent/agent.py:104,159`），所以那句中文报错是**带引号的 JSON 字符串**，
+    `_result_error` 才认得出。
+
+    要是它哪天改成直接塞裸字符串，`json.loads` 抛异常 → 这里 `return None` →
+    **失败被当成成功**，而且是静默的。钉住当前行为，改的时候至少有人看得见。
+    """
+    messages = [
+        user(),
+        assistant(("c1", "read_file", '{"path": "a.py"}')),
+        tool("c1", "文件不存在: a.py"),  # 裸字符串，不是 json.dumps 过的
+    ]
+
+    call = build(messages, LlmStats()).calls[0]
+
+    assert call.ok is True
+    assert call.error is None
+
+
+def test_final_answer_flattens_multimodal_content():
+    """`content` 是多模态块时要摊平成 str。
+
+    不摊平的话 `metrics` 那边 `re.search` 会拿 list 去匹配、直接 TypeError，
+    整次 run 白跑（而且会被兜底吞成一条 error，看不出真正原因）。
+    """
+    messages = [
+        user(),
+        assistant(content=[{"type": "text", "text": "测试全部通过"}]),
+    ]
+
+    assert build(messages, LlmStats()).final_answer == "测试全部通过"
+
+
+def test_final_answer_ignores_content_it_cannot_read():
+    """认不出的形状给空串，绝不返回非 str —— 类型契约比内容完整更优先。"""
+    messages = [user(), assistant(content=42)]
+
+    assert build(messages, LlmStats()).final_answer == ""

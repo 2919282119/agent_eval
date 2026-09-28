@@ -32,6 +32,10 @@ UNVERIFIED_RULES = ["NO_EXPLORATION", "WRONG_ARGUMENT"]
 
 RULE = "─" * 28
 
+# 一条 run 记录至少要有这几个字段才当得起「记录」。`load_baseline` 拿它挡目录里
+# 混进来的杂 json —— 缺了它们在 `summarize` 里会 KeyError，而报错完全不指向文件。
+_RECORD_REQUIRED = ("task_id", "status", "evaluation")
+
 # k=1 时效率数字只是**单次观测**，而 miniCC 的 call_llm 硬编码了 temperature=1，
 # 方差拉满 —— 同一道题跑两次可以差 3 倍工具调用、13 倍 token。拿单次跑出来的数
 # 跟别的轮次比，比的是噪声不是趋势。报告要给结论，就得先说清这一点；
@@ -41,7 +45,7 @@ _SINGLE_RUN_NOTE = "k=1 只有单次观测，数字含大随机波动，勿跨�
 
 def summarize(records) -> dict:
     """一次评估的汇总数字。error 的 run 不进任何统计。"""
-    valid = [r for r in records if r["status"] != "error"]
+    valid = _valid(records)
     succeeded = [r for r in valid if r["status"] == "success"]
     k = _uniform_k(records)
 
@@ -135,6 +139,9 @@ def load_baseline(path) -> list[dict]:
     """读取基线目录下所有 run json。
 
     跳过 `<...>.calls.json` sidecar —— 它不是 run 记录，混进来会污染统计。
+
+    目录里混进别的 json（随手放的笔记之类）时**报错并指名文件**。不静默跳过：
+    少一条记录只会让 diff 悄悄偏掉，而读者无从察觉；报错至少能让人把目录收拾干净。
     """
     import json
     from pathlib import Path
@@ -143,7 +150,18 @@ def load_baseline(path) -> list[dict]:
     for file in sorted(Path(path).glob("*.json")):
         if file.name.endswith(".calls.json"):
             continue
-        records.append(json.loads(file.read_text(encoding="utf-8")))
+        record = json.loads(file.read_text(encoding="utf-8"))
+        missing = (
+            list(_RECORD_REQUIRED)
+            if not isinstance(record, dict)
+            else [name for name in _RECORD_REQUIRED if name not in record]
+        )
+        if missing:
+            raise ValueError(
+                f"{file} 不像一条 run 记录：缺 {', '.join(missing)}。"
+                f"`--baseline` 只能指向 runs/<时间戳>/ 这种目录"
+            )
+        records.append(record)
     return records
 
 
@@ -160,6 +178,17 @@ def _group_by_task(records) -> dict:
     for record in records:
         groups.setdefault(record["task_id"], []).append(record)
     return groups
+
+
+def _valid(records) -> list:
+    """error 的 run 不进任何统计 —— 它是 eval 侧异常（agent 崩了，或验收程序
+    自己抛了），代表的不是 agent 的表现。
+
+    单独抽成一个函数是为了**只有一处定义**：之前 `task_success` 维度滤了、
+    `pass@k` 忘了滤，于是同一份报告能同时印出「Task Success 100%」和
+    「pass@3 50%」，后者只是因为某道题崩了几次、根本没法判断成没成。
+    """
+    return [r for r in records if r["status"] != "error"]
 
 
 def _identity(records) -> dict:
@@ -306,8 +335,12 @@ def _tag_ratio(records, tag) -> float:
 
 
 def _pass_at_k(records) -> float | None:
-    """k 次里至少一次成功。与 pass^k 独立保留，不做加权求和。"""
-    groups = _group_by_task(records)
+    """k 次里至少一次成功。与 pass^k 独立保留，不做加权求和。
+
+    先滤掉 error 的 run（见 `_valid`）—— 跟 `task_success` 维度一个口径。
+    某道题整轮都崩的话它不进分母：连一次有效观测都没有，谈不上「成功没成功」。
+    """
+    groups = _group_by_task(_valid(records))
     if not groups:
         return None
     return sum(
@@ -316,8 +349,8 @@ def _pass_at_k(records) -> float | None:
 
 
 def _pass_k(records) -> float | None:
-    """k 次全部成功。"""
-    groups = _group_by_task(records)
+    """k 次全部成功。同样只算有效的 run。"""
+    groups = _group_by_task(_valid(records))
     if not groups:
         return None
     return sum(
@@ -328,7 +361,7 @@ def _pass_k(records) -> float | None:
 def _per_task(records) -> dict:
     out = {}
     for task_id, runs in _group_by_task(records).items():
-        valid = [r for r in runs if r["status"] != "error"]
+        valid = _valid(runs)
         succeeded = [r for r in valid if r["status"] == "success"]
         out[task_id] = {
             "success": (len(succeeded) / len(valid)) if valid else None,

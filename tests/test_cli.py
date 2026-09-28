@@ -77,6 +77,15 @@ def test_main_saves_the_report_next_to_the_run_records(tmp_path, monkeypatch):
     assert reports[0].read_text(encoding="utf-8").startswith("Agent Evaluation Report")
 
 
+def test_main_returns_1_when_there_are_no_tasks(tmp_path, capsys):
+    """空任务集要报错退出，而不是安静地写一份「零个任务」的报告。"""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    assert main(["--tasks", str(empty), "--out", str(tmp_path / "out")]) == 1
+    assert "没找到任何任务" in capsys.readouterr().err
+
+
 def test_write_report_saves_the_text(tmp_path):
     write_report(tmp_path, "Agent Evaluation Report\n───\n")
 
@@ -87,7 +96,9 @@ def test_write_report_saves_the_text(tmp_path):
 
 def test_saved_report_is_not_mistaken_for_a_run_record(tmp_path):
     """`load_baseline` 只读 *.json —— 报告文件不能被当成 run 记录混进统计。"""
-    (tmp_path / "t1_run_001.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "t1_run_001.json").write_text(
+        '{"task_id": "t1", "status": "success", "evaluation": {}}', encoding="utf-8"
+    )
     write_report(tmp_path, "报告")
 
-    assert [record for record in load_baseline(tmp_path)] == [{}]
+    assert [record["task_id"] for record in load_baseline(tmp_path)] == ["t1"]

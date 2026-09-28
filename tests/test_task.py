@@ -1,6 +1,12 @@
 import pytest
 
-from agenteval.task import Check, load_task, run_verifier, workspace_files
+from agenteval.task import (
+    Check,
+    load_task,
+    load_workspace_module,
+    run_verifier,
+    workspace_files,
+)
 
 YAML_FULL = """\
 task_id: fix_offbyone_001
@@ -79,6 +85,51 @@ def test_load_task_reads_retired_flag(tmp_path):
     task_dir = make_task_dir(tmp_path, YAML_RETIRED, VERIFY_MIXED)
 
     assert load_task(task_dir).retired is True
+
+
+def test_load_workspace_module_returns_none_on_broken_code(tmp_path):
+    """agent 写出语法错误的代码是**最常见的失败形态** —— 必须返回 None，不能抛。
+
+    验收程序靠这个 None 把它变成一条失败的 check；抛出去会让整次 run 变成 error
+    （而 error 不进任何统计，等于这次观测白费）。
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "broken.py").write_text("def f(:\n", encoding="utf-8")
+
+    assert load_workspace_module(workspace, "broken.py") is None
+
+
+def test_load_workspace_module_returns_none_for_a_missing_file(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    assert load_workspace_module(workspace, "nope.py") is None
+
+
+def test_load_task_rejects_mistyped_fields(tmp_path):
+    """task.yaml 是手写文件，类型错了必须当场报错。
+
+    这几个字段类型错了会**静默变形**，比报错危险得多：
+
+        forbidden_tools: read_file   → list("read_file") 变成 10 个字母，规则悄悄失效
+        max_tool_calls: "12"         → 算分时 `len(calls) > "12"` TypeError
+        retired: "false"             → 真值，题悄悄从默认任务集里消失
+    """
+    cases = [
+        ("forbidden_tools: read_file\n", "forbidden_tools"),
+        ("expected_tools: read_file\n", "expected_tools"),
+        ('max_tool_calls: "12"\n', "max_tool_calls"),
+        ('retired: "false"\n', "retired"),
+    ]
+
+    for extra, field in cases:
+        base = tmp_path / field
+        base.mkdir()
+        yaml_src = f"task_id: t\ninstruction: 随便做点什么\n{extra}"
+        with pytest.raises(ValueError) as excinfo:
+            load_task(make_task_dir(base, yaml_src, VERIFY_MIXED))
+        assert field in str(excinfo.value)
 
 
 def test_check_rejects_unknown_weight():

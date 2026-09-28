@@ -80,6 +80,10 @@ def evaluate(traj, checks, task, initial_files) -> EvalResult:
     core = [c for c in checks if c.weight in ("essential", "important")]
 
     evaluation = {
+        # `bool(essential)` 不是冗余：**一道没有任何 essential 检查的题永远不算成功**。
+        # 这是有意的 fail-closed —— 没有关键项就没法判定「做完了」，报成功等于放水。
+        # 题目写漏 essential 属于出题错误，`tests/test_tasks.py` 的参考修复体检会拦住
+        # （要求未修复时至少挂一条 essential），所以正常不会有这种题。
         "task_success": bool(essential) and all(c.passed for c in essential),
         "correctness": _pass_rate(core),
         "completeness": _weighted_rate(checks),
@@ -218,26 +222,32 @@ def _is_inefficient(traj, task) -> bool:
 
 
 def _has_blind_repeats(calls) -> bool:
-    """同一个 `(name, arguments)` 连续重复 ≥3 次 —— 这才是「盲目重复」。
+    """同一个 `(name, arguments)` 在**只读类工具之间**重复 ≥3 次 = 盲目重复。
 
-    **中间改过文件，计数就归零。** 实测踩过：`encoding_trap_010` 那轮
-    `read_file pricing.py` 出现了 3 次，但分别在「初次探索」「改完确认」
-    「整个重写之后再确认」之后 —— 这是正当工作流，判 INEFFICIENT 是冤枉的。
-    规则自己的注释就写着「阈值 3 是为了不误伤合法的重复读取（先读一遍，改完再读
-    一遍确认）」，所以把「中间有改动」的情形排除掉，跟意图对齐。
+    关键在于「什么时候归零」。这里只在**中间出现过任何可能写文件的调用**时归零 ——
+    只有 `read_file` / `list_dir` / `glob` / `grep` 是确定不改文件的，所以中间一旦
+    冒出别的工具（`edit_file`、`write_file`、`bash`、`run_subagent`……）计数就清空。
+    这么算出来的一定是对的：中间没人动过文件，重复读拿到的就是同一份内容。
 
-    口径宁窄勿宽：`max_tool_calls` 那个口子（任务自己设的）仍然照旧能抓到粗暴的浪费。
+    **为什么不能只认 `edit_file` / `write_file`：** 实测踩过，而且曾经当成真阳性报出去。
+    `encoding_trap_010` 那轮 agent 用 `python -c "open('_dump.txt','w')"` 反复重写同一个
+    文件再读，三次 `read_file _dump.txt` 中间夹着**两次 bash 重写**。按「只认写文件类
+    工具」会判它盲目重复 —— 可它读的是三个**不同版本**的文件。那次是误报。
+
+    ⚠️ 代价：36 条真实 sidecar 上这条现在命中 0 次（跟 `NO_EXPLORATION` 一样暂时不出
+    信号）。这是有意的 —— 按本项目的教训，**假阳性比沉默危险**（问题 3：7 条标签 6 条假）。
+    粗暴的浪费由 `max_tool_calls`（任务自己设的上限）兜，那个口子不受这里影响。
     """
-    streak = Counter()
+    counts = Counter()
     for call in calls:
-        if call.name in EDIT_TOOLS:
-            # 世界变了，之前的重复不再算「盲目」
-            streak.clear()
+        if call.name not in EXPLORE_TOOLS:
+            # 世界可能变了，之前的重复不再算「盲目」
+            counts.clear()
             continue
 
         signature = (call.name, json.dumps(call.arguments, sort_keys=True, ensure_ascii=False))
-        streak[signature] += 1
-        if streak[signature] >= REPEAT_THRESHOLD:
+        counts[signature] += 1
+        if counts[signature] >= REPEAT_THRESHOLD:
             return True
     return False
 

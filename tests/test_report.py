@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from agenteval.report import load_baseline, render, summarize
 
 EMPTY_EVALUATION = {
@@ -93,6 +95,22 @@ def test_error_runs_are_excluded_from_every_statistic():
     # 3 个 run 里只有 2 个有效，其中 1 个成功 → 50%，不是 1/3
     assert summary["dimensions"]["task_success"] == 0.5
     assert summary["failures"]["INCOMPLETE"] == 0.5
+
+
+def test_error_runs_do_not_drag_down_pass_at_k():
+    """整轮都崩的题不该进 pass@k 的分母。
+
+    它连一次有效观测都没有，谈不上「成功没成功」。不滤的话同一份报告会同时印
+    「Task Success 100%」和「pass@3 50%」—— 两个都自称成功率却对不上。
+    """
+    records = [make_error_record(task_id="broken", run_id=f"r{i}") for i in range(3)]
+    records += [make_record(task_id="fine", run_id=f"r{i}") for i in range(3)]
+
+    summary = summarize(records)
+
+    assert summary["dimensions"]["task_success"] == 1.0
+    assert summary["pass_at_k"] == 1.0
+    assert summary["pass_k"] == 1.0
 
 
 def test_efficiency_only_counts_successful_runs():
@@ -496,3 +514,17 @@ def test_load_baseline_skips_calls_sidecar(tmp_path):
 
     assert len(records) == 1
     assert records[0]["task_id"] == "a"
+
+
+def test_load_baseline_rejects_a_json_that_is_not_a_run_record(tmp_path):
+    """目录里混进别的 json 要**报错并指名文件**。
+
+    静默跳过只会让 diff 悄悄偏掉，而读者无从察觉；报错至少能让人把目录收拾干净。
+    修改前这里是 `KeyError: 'status'`，完全不指向是哪个文件。
+    """
+    (tmp_path / "notes.json").write_text('{"hello": "world"}', encoding="utf-8")
+
+    with pytest.raises(ValueError) as excinfo:
+        load_baseline(tmp_path)
+
+    assert "notes.json" in str(excinfo.value)

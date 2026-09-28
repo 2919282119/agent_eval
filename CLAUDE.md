@@ -81,6 +81,9 @@ tasks/<task_id>/
 - `max_tool_calls`：超过后标记 `INEFFICIENT`
 - `retired: true`：默认任务集跳过，但目录必须保留
 
+`load_task` 在边界校验 `task.yaml` 的字段类型（`_reject_mistyped_fields`）：`forbidden_tools: read_file`
+会变成 10 个字母，`retired: "false"` 是真值。内部代码不再重复检查。
+
 `verify.py` 必须提供 `check(workspace) -> list[Check]`，保持纯 Python、零 pytest 依赖。检查权重只能是：
 
 ```text
@@ -118,7 +121,13 @@ minor = 1
 success | failed | vetoed | error
 ```
 
-`error` 表示 runner 自身异常，不进入成功率、失败分布或效率统计。veto 是安全网，不是普通失败标签。
+`error` 表示 eval 侧异常，**不进入任何统计**：来源是 agent 崩溃/超时、验收程序抛异常、
+runner 漏网的异常 —— `run_task` 必须全兜住，否则异常冲出 `cli.main` 会一次带走整批 run。
+它的 run **保留工作区**，路径写进记录的 `error` 字段（否则就是暗漏的临时目录）。
+
+「哪些 run 算数」只在 `report._valid` 定义一处 —— `pass@k` 曾漏滤 `error`，同一份报告
+会同时印「Task Success 100%」和「pass@3 50%」。报告在 `cli.main` 的 `finally` 里写，
+中途崩了也留一份。`load_baseline` 校验记录形状，混进杂 json 会报错并指名文件。
 
 ## 评分规则
 
@@ -132,6 +141,11 @@ v1 只使用确定性规则：
 - `groundedness`：v1 恒为 `null`
 
 失败标签包括 `INCOMPLETE`、`WRONG_TOOL`、`WRONG_ARGUMENT`、`INEFFICIENT`、`NO_EXPLORATION` 和 `CLAIMS_WITHOUT_ACTION`。规则必须优先避免假阳性，修改后要运行真实轨迹回放测试。
+
+**已知假阴性（有意不修）：** `_edits_existing_file` 只认 `edit_file` / `write_file`，
+agent 用 `sed -i` / `python -c "open(...,'w')"` 改文件时 `WRONG_TOOL`、`NO_EXPLORATION`
+看不见。解析 shell 命令是启发式、会误判；对比工作区快照可靠但会打破「sidecar 就能
+判定失败标签」这条不变量（回放测试失效）。漏判安全、误判危险，所以留着。
 
 Windows 上 bash 的非零退出码不计入工具级错误：miniCC 使用 `shell=True`，实际走 `cmd.exe`，Linux shell 语法失败会造成大量环境噪声。该限制及其影响记录在 `TODO.md`。
 

@@ -92,14 +92,34 @@ def build(messages, stats: LlmStats) -> Trajectory:
 
 
 def final_answer(messages) -> str:
-    """agent 最后一条带正文的 assistant 消息。
+    """agent 最后一条带正文的 assistant 消息，**保证返回 `str`**。
 
     CLAIMS_WITHOUT_ACTION 这类标签是按回答的措辞判的，所以回答本身必须能拿到 ——
     它要落进 sidecar，否则失败标签事后没法核对。
+
+    `content` 可能是 `[{"type": "text", "text": ...}]` 这种多模态块（OpenAI 的形状）。
+    不在这里摊平的话，`metrics` 那边 `re.search` 会拿 list 去匹配、直接 TypeError，
+    整次 run 白跑。摊平之后这个函数只返回 `str`，调用方不必各写一遍类型判断。
     """
     for message in reversed(messages):
-        if message.get("role") == "assistant" and message.get("content"):
-            return message["content"]
+        if message.get("role") != "assistant":
+            continue
+        text = _text_of(message.get("content"))
+        if text:
+            return text
+    return ""
+
+
+def _text_of(content) -> str:
+    """把 assistant 的 `content` 摊平成文本；认不出的形状返回空串。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text") or ""
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
     return ""
 
 

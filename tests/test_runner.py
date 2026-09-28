@@ -1,10 +1,14 @@
 import os
+import shutil
+from pathlib import Path
 
 import agent.agent as A
 import pytest
 
-from agenteval.runner import drive_agent, run_task
+from agenteval.metrics import blank_evaluation
+from agenteval.runner import AgentOutcome, drive_agent, run_task
 from agenteval.task import load_task
+from agenteval.trajectory import LlmStats
 
 TASK_YAML = """\
 task_id: hello_001
@@ -112,3 +116,99 @@ def test_run_task_end_to_end(tmp_path):
     assert result.calls
     assert {"name", "arguments", "ok", "error"} == set(result.calls[0])
     assert result.final_answer
+
+
+def test_crashing_verifier_becomes_an_error_record(tmp_path, monkeypatch):
+    """验收程序抛异常必须变成 status="error" 的记录，不能冲出去。
+
+    冲出去的后果不是丢一次 run —— 是**整批 run 全没**：异常一路穿过
+    `run_task` / `cli.main`，没有一层接得住。而验收读的是 agent 改过的产物，
+    抛异常随时可能发生（实测：删掉一个调用点文件就让 `extract_helper_013`
+    的验收抛 FileNotFoundError）。
+
+    `drive_agent` 早就防了这一层（agent 崩了要记成 error），验收这层原先没有。
+
+    离线用例：把真 agent 和真验收都换掉，不花 API。
+    """
+    import agenteval.runner as runner
+
+    task = make_task(tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "drive_agent",
+        lambda instruction, workspace, model=None: AgentOutcome(
+            [], LlmStats(latency_ms=1)
+        ),
+    )
+
+    def boom(task, workspace):
+        raise FileNotFoundError("billing.py")
+
+    monkeypatch.setattr(runner, "run_verifier", boom)
+
+    record = run_task(task, run_idx=1).record
+
+    assert record["status"] == "error"
+    assert "验收程序异常" in record["error"]
+    assert "FileNotFoundError" in record["error"]
+    # 跟 agent 崩溃一个待遇：所有维度为 null，不进任何统计
+    assert record["evaluation"] == blank_evaluation()
+    assert record["failures"] == []
+
+
+def test_run_task_never_lets_an_exception_escape(tmp_path, monkeypatch):
+    """**任何**漏网的异常都要降级成 error 记录。
+
+    冲出 `cli.main` 的代价不是丢一次 run，是整批 run 全没 —— 而 `run_task` 里
+    除了已经单独兜住的验收，还有 copytree、drive_agent、trajectory.build、
+    写记录本身。这里拿最凶的一种试：崩的就是 `trajectory.build`。
+    """
+    import agenteval.runner as runner
+
+    task = make_task(tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "drive_agent",
+        lambda instruction, workspace, model=None: AgentOutcome(
+            [], LlmStats(latency_ms=1)
+        ),
+    )
+
+    def exploding_build(messages, stats):
+        raise RuntimeError("轨迹解析炸了")
+
+    monkeypatch.setattr(runner.trajectory, "build", exploding_build)
+
+    record = run_task(task, run_idx=1).record
+
+    assert record["status"] == "error"
+    assert "runner 异常" in record["error"]
+    assert "轨迹解析炸了" in record["error"]
+    assert record["evaluation"] == blank_evaluation()
+
+
+def test_error_run_keeps_its_workspace_for_postmortem(tmp_path, monkeypatch):
+    """崩掉的 run 要留住现场，事后才查得出它崩前动过什么。
+
+    代价是每崩一次多留一个临时目录 —— 所以路径写进记录的 `error` 字段，
+    不让它变成「悄悄漏在 %TEMP% 里的目录」。
+    """
+    import agenteval.runner as runner
+
+    task = make_task(tmp_path)
+    monkeypatch.setattr(
+        runner,
+        "drive_agent",
+        lambda instruction, workspace, model=None: AgentOutcome(
+            [], LlmStats(latency_ms=1), error="agent 崩了"
+        ),
+    )
+
+    record = run_task(task, run_idx=1).record
+
+    assert record["status"] == "error"
+    saved = Path(record["error"].split("现场保留在 ")[1].rstrip("）"))
+    try:
+        assert saved.is_dir(), "error run 的工作区被删了，现场就没了"
+    finally:
+        shutil.rmtree(saved, ignore_errors=True)
