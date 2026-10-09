@@ -93,6 +93,10 @@ class AgentOutcome:
     # 真正压缩过几次（compact 返回 True 才算 —— auto_compact 会被调用但可能
     # 因为历史不足 10 条而没压成）
     compactions: int = 0
+    # 撞上 miniCC 的 MAX_LOOP_CNT 被切断：agent 没跑完就退出来了，最后一条消息
+    # 还是工具调用、没有最终回答。**它跟正常跑完的 run 在记录里原本一模一样** ——
+    # 验收看的是产物，产物对了就是 success，于是「没跑完」这件事整个消失。
+    truncated: bool = False
 
 
 @dataclass
@@ -143,6 +147,7 @@ def drive_agent(instruction, workspace, model: str = DEFAULT_MODEL) -> AgentOutc
     cwd_before = os.getcwd()
     started = time.perf_counter()
     error = None
+    truncated = False
 
     A.call_llm = counting_call_llm
     A.load_cc_md = lambda: ""
@@ -172,6 +177,7 @@ def drive_agent(instruction, workspace, model: str = DEFAULT_MODEL) -> AgentOutc
             verbose=False,
             permission_mode="auto",
         )
+        truncated = _hit_loop_cap(state.messages, stats.llm_calls)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
     finally:
@@ -181,8 +187,34 @@ def drive_agent(instruction, workspace, model: str = DEFAULT_MODEL) -> AgentOutc
         A.load_cc_md = original_load_cc_md
 
     return AgentOutcome(
-        messages=state.messages, stats=stats, error=error, compactions=compactions
+        messages=state.messages,
+        stats=stats,
+        error=error,
+        compactions=compactions,
+        truncated=truncated,
     )
+
+
+def _hit_loop_cap(messages, llm_calls) -> bool:
+    """这次 run 是不是撞上 miniCC 的循环上限被切断的。
+
+    上限从 miniCC 现读（`MAX_LOOP_CNT`，不硬编码 —— 它改了这里得跟着改）。两个条件
+    缺一不可：
+
+      - 调用次数到顶；
+      - **并且**最后一条 assistant 消息还带着工具调用。
+
+    第二个条件是关键：`agent_loop` 正常收尾时是「这次回答没有工具调用」→ `return`，
+    所以跑完的那次必然不带 tool_calls；被切断时它是 `break` 出去的，最后一轮工具
+    调用的结果 agent 根本没机会看到。少了这个条件，恰好用满 30 次的正常 run 会被误标。
+    """
+    limit = getattr(A, "MAX_LOOP_CNT", None)
+    if not limit or llm_calls < limit:
+        return False
+    for message in reversed(messages):
+        if message.get("role") == "assistant":
+            return bool(message.get("tool_calls"))
+    return False
 
 
 def run_task(task, run_idx, model: str = DEFAULT_MODEL) -> RunResult:
@@ -220,7 +252,8 @@ def run_task(task, run_idx, model: str = DEFAULT_MODEL) -> RunResult:
             error = f"{error}（现场保留在 {workspace}）"
 
         return _run_result(
-            task, run_idx, model, traj, outcome, evaluation, failures, status, error
+            task, run_idx, model, traj, outcome, evaluation, failures, status, error,
+            workspace,
         )
     finally:
         if not keep_workspace:
@@ -272,7 +305,7 @@ def _judge(task, workspace, traj, outcome):
 
 
 def _run_result(
-    task, run_idx, model, traj, outcome, evaluation, failures, status, error
+    task, run_idx, model, traj, outcome, evaluation, failures, status, error, workspace
 ) -> RunResult:
     """主记录 + sidecar 的**唯一**构造点。
 
@@ -303,6 +336,16 @@ def _run_result(
                 outcome.stats.max_prompt_tokens / MODELS[model].context_window, 4
             ),
             "compactions": outcome.compactions,
+            # 没跑完（撞循环上限）的 run。产物过了验收就还是 success，但
+            # 「agent 没来得及收尾」这件事必须在记录里留下 —— 否则报告看不出来。
+            "truncated": outcome.truncated,
+            # Windows 上 shell=True 走 cmd.exe、`;` 不是分隔符，agent 写的 POSIX
+            # 命令会被拼成一条。这是「工作区被误删」的口子，记的是**底数**不是标志
+            # （36 个真实 run 里 27 个都含 `;`，当标志会把 3/4 的 run 全标上）。
+            "posix_separator_calls": _posix_separator_calls(traj),
+            # 初始工作区里有、跑完不见了的源文件。**硬事实**，不是启发式：报告据此
+            # 提示这条 run 的失败标签可能来自环境而不是 agent。空列表是常态。
+            "missing_initial_files": _missing_initial_files(task, workspace, status),
             "status": status,
             "error": error,
             "trajectory": traj.summary(),
@@ -312,3 +355,39 @@ def _run_result(
         calls=[asdict(call) for call in traj.calls],
         final_answer=traj.final_answer,
     )
+
+
+def _posix_separator_calls(traj) -> int:
+    """bash 命令里含 `;` 的调用数。
+
+    只数 `;` 这一个记号：它是最清楚的一个（cmd.exe 完全不当它是分隔符），而
+    `&&` / `|` cmd 也认，数了会误报。
+    """
+    return sum(
+        1
+        for call in traj.calls
+        if call.name == "bash" and ";" in str(call.arguments.get("command") or "")
+    )
+
+
+def _source_files(root) -> set:
+    """目录下的源文件相对路径。**排除 `__pycache__`** —— 那是派生物，
+    agent 清掉它（很常见的收尾动作）不该被读成「工作区被破坏」。
+    """
+    root = Path(root)
+    return {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    }
+
+
+def _missing_initial_files(task, workspace, status) -> list:
+    """初始工作区里有、这个 run 跑完之后不见了的文件。
+
+    error 的 run 不算：那时工作区可能压根没铺完（copytree 自己就崩了），
+    报「文件全丢了」是误导。
+    """
+    if status == "error":
+        return []
+    return sorted(_source_files(task.workspace) - _source_files(workspace))

@@ -27,6 +27,11 @@ from agenteval.runner import load_mini_cc_env
 # 写进 `judge` 字典的 provider 键。只有一个 judge 时它就是 primary。
 PRIMARY = "llm"
 
+# 解析不出来时最多问几次。2 而不是 1：实测失手过一次（模型把键名打成
+# `groundroundedness`），一个字符的笔误让整条记录掉出统计。再多问也没意义 ——
+# temperature 是 0，第二次还错说明是系统性的。
+ATTEMPTS = 2
+
 GROUNDEDNESS = "groundedness"
 CLAIMS_CONSISTENT = "claims_consistent"
 
@@ -101,13 +106,21 @@ def _render(state) -> str:
         for index, call in enumerate(state["tool_calls"])
     ) or "  （没有工具调用）"
     questions = "\n".join(f"- {name}：{text}" for name, text in _QUESTIONS.items())
-    return _PROMPT_SHAPE.format(
+    text = _PROMPT_SHAPE.format(
         task=state["task"] or "（未知）",
         result=json.dumps(state["deterministic_result"], ensure_ascii=False),
         calls=calls,
         answer=state["final_answer"] or "（空）",
         questions=questions,
     )
+    # 只在重试时出现（见 `judge_one`）。它**不进 prompt_hash** —— 那是测
+    # 「问题怎么问」的，不是测「这次重试说了什么」。
+    if state.get("repair"):
+        text += (
+            f"\n\n（上一次的回答没法解析：{state['repair']}。"
+            "请**只**输出上面那一个 JSON 对象，两个键名都要原样写对。）"
+        )
+    return text
 
 
 def parse_reply(text) -> dict:
@@ -115,7 +128,7 @@ def parse_reply(text) -> dict:
 
     模型经常把 JSON 包在 ``` 里或前后加一句话，所以先整体试，再退到第一个 `{...}`。
     严格校验：缺键、值不是数字、值不在 [0,1] 都算失败。允许它「没判出来」，
-    不允许它悄悄给一个编出来的分数。
+    不允许它悄悄给一个编出来的分数。抛出去之后 `judge_one` 会换句话再问一次。
     """
     payload = _loads_lenient(text)
     if not isinstance(payload, dict):
@@ -182,24 +195,44 @@ def judge_one(record, sidecar, model: str, ask=None) -> dict:
         "results": None,
     }
     started = time.perf_counter()
-    try:
-        response = ask(build_state(record, sidecar), model)
-        results = parse_reply(response.choices[0].message.content)
-    except Exception as exc:
-        base["status"] = "error"
-        base["error"] = f"{type(exc).__name__}: {exc}"
+
+    # 没有最终回答就没有可判的东西，**这时不能给分**。之前 prompt 里那句「拿不准就
+    # 给中间值」让模型给空回答打了 0.5 —— 一个凭空编的数字进了两个维度的平均值
+    # （实测 12 题 × k=3 里 4 条，把 Groundedness 从 92% 拖到 88%）。空回答多半是
+    # agent 撞了 miniCC 的循环上限（见 `runner._hit_loop_cap`），压根不是「没答好」。
+    if not (sidecar.get("final_answer") or "").strip():
+        base["status"] = "skipped"
+        base["reason"] = "最终回答为空，没有可判的语义内容"
         base["latency_ms"] = int((time.perf_counter() - started) * 1000)
         return base
 
-    base["status"] = "success"
-    base["results"] = results
+    state = build_state(record, sidecar)
+    error = None
+    for _ in range(ATTEMPTS):
+        try:
+            response = ask(state, model)
+            results = parse_reply(response.choices[0].message.content)
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            # 重试必须**换个说法**：judge 的 temperature 是 0，原样再问一遍拿回的
+            # 多半是同一个坏回答（实测见过模型把键名打成 `groundroundedness`）。
+            state = {**state, "repair": error}
+            continue
+
+        base["status"] = "success"
+        base["results"] = results
+        base["latency_ms"] = int((time.perf_counter() - started) * 1000)
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            base["usage"] = {
+                "input_tokens": getattr(usage, "prompt_tokens", None),
+                "output_tokens": getattr(usage, "completion_tokens", None),
+            }
+        return base
+
+    base["status"] = "error"
+    base["error"] = f"问了 {ATTEMPTS} 次都没拿到能用的回答，最后一次：{error}"
     base["latency_ms"] = int((time.perf_counter() - started) * 1000)
-    usage = getattr(response, "usage", None)
-    if usage is not None:
-        base["usage"] = {
-            "input_tokens": getattr(usage, "prompt_tokens", None),
-            "output_tokens": getattr(usage, "completion_tokens", None),
-        }
     return base
 
 
@@ -247,13 +280,13 @@ def main(argv=None) -> int:
 
     load_mini_cc_env()
 
-    judged = failed = skipped = 0
+    judged = failed = errored = empty = 0
     for record_path in records:
         record = json.loads(record_path.read_text(encoding="utf-8"))
         if record.get("status") == "error":
             # agent 崩了 / 验收自己抛异常 —— 没有可判的轨迹，而且这类 run
             # 本来就不进任何统计，判它只是白白花 API 钱
-            skipped += 1
+            errored += 1
             continue
         sidecar_path = record_path.with_name(record_path.name[: -len(".json")] + ".calls.json")
         sidecar = (
@@ -265,22 +298,25 @@ def main(argv=None) -> int:
         verdict = judge_one(record, sidecar, args.model)
         write_back(record_path, record, verdict)
 
+        where = f"[{record['task_id']}/{record['run_id']}]"
         if verdict["status"] == "success":
             judged += 1
             scores = "  ".join(
                 f"{name} {entry['value']:.2f}" for name, entry in verdict["results"].items()
             )
-            print(f"[{record['task_id']}/{record['run_id']}] {scores}", flush=True)
+            print(f"{where} {scores}", flush=True)
+        elif verdict["status"] == "skipped":
+            empty += 1
+            print(f"{where} 跳过：{verdict['reason']}", flush=True)
         else:
             failed += 1
-            print(
-                f"[{record['task_id']}/{record['run_id']}] 判失败：{verdict['error']}",
-                flush=True,
-            )
+            print(f"{where} 判失败：{verdict['error']}", flush=True)
 
     summary = f"\n判了 {judged} 条，失败 {failed} 条"
-    if skipped:
-        summary += f"，跳过 {skipped} 条 error run"
+    if empty:
+        summary += f"，跳过 {empty} 条（最终回答为空，不判）"
+    if errored:
+        summary += f"，跳过 {errored} 条 error run"
     print(summary + f"（模型 {args.model}，prompt {prompt_hash()}）")
     # 全失败说明多半是 key / 模型名 / 网络的问题，退出码要能反映出来
     return 1 if judged == 0 else 0

@@ -2,8 +2,8 @@
 
 给 **miniCC**（自制的迷你 Claude Code）做的 agent 评估框架。
 
-跑真实 coding 任务 → 采轨迹 → 用确定性规则打分 → 出报告，并支持跟历史轮次对比。
-**目的只有一个：回答「miniCC 的新版本比旧版本好在哪」。**
+跑真实 coding 任务 → 采轨迹 → 用确定性规则打分 →（可选）LLM 语义面 → 出报告，
+并支持跟历史轮次对比。**目的只有一个：回答「miniCC 的新版本比旧版本好在哪」。**
 
 | 文档 | 内容 |
 |---|---|
@@ -41,11 +41,11 @@ python -m agenteval.cli --tasks tasks/ --k 3 --baseline runs/<旧目录>/
 ```bash
 cd D:/Code/python_project/agent_eval
 
-python -m pytest tests/ -q                     # 全套，离线，秒级
+python -m pytest tests/ -q                     # 319 个用例，离线约 15 秒
 python -m pytest tests/ -m integration -v      # 真调 API 的用例，默认被排除
 
-python -m agenteval.cli --tasks tasks/ --k 1   # 12 题，约 10 分钟
-python -m agenteval.cli --tasks tasks/ --k 3   # 12 题，约 30 分钟
+python -m agenteval.cli --tasks tasks/ --k 1   # 12 次运行，约 12 分钟
+python -m agenteval.cli --tasks tasks/ --k 3   # 36 次运行，约 40 分钟（实测）
 
 # 跑完顺手判语义面 + 让模型读一遍报告写段分析（都可选）
 python -m agenteval.cli --tasks tasks/ --k 3 --judge kimi --analyze kimi
@@ -64,6 +64,10 @@ python -m agenteval.cli --tasks tasks/ --k 3 --judge kimi --analyze kimi
 结果落在 `runs/<时间戳>/`：主记录 `<task>_<run>.json`、逐次工具调用的 sidecar
 `<task>_<run>.calls.json`（事后核对失败标签靠它，里面也存了工具结果的截断版 ——
 judge 判 `groundedness` 要用）、汇总 `report.txt`。
+
+主记录里另有三个**数据质量**字段：`truncated`（撞上 miniCC 的循环上限，没跑完）、
+`missing_initial_files`（跑完时初始工作区少了文件）、`posix_separator_calls`（bash 命令
+含 `;` 的次数）。报告里的 `Truncated` / `Environment` 两段读的就是它们 —— 详见 `CLAUDE.md`。
 
 ## 一个任务长什么样
 
@@ -108,39 +112,74 @@ def check(workspace):
 前五个维度全部是确定性规则，只看轨迹和产物。`groundedness` 和 `claims_consistent` 是
 **第二评估面**：跑 `agenteval.judge` 才有，详见下面「语义面」。
 
+`error_recovery` 只统计**工具级**错误。「命令跑完了、只是退出码非 0」不算 —— Windows 上
+`shell=True` 走 cmd.exe，而被测 agent 写的是 Linux shell 语法，这类失败大面积出现且几乎
+必然恢复，算进去这个维度会恒等于 1.0（实现见 `trajectory.is_command_failure`）。
+
 失败标签（全部走确定性规则，不用 LLM）：
 
 | 标签 | 判定 |
 |---|---|
 | `INCOMPLETE` | 有 `essential` / `important` check 失败 |
 | `WRONG_TOOL` | 覆盖了初始工作区里已有的文件，而该工具在 `forbidden_tools` 里 |
-| `INEFFICIENT` | 工具调用超上限，或同一调用盲目重复 |
-| `NO_EXPLORATION` | 改了已有文件却从没探索过 |
+| `WRONG_ARGUMENT` | 工具参数出错（坏 JSON、猜错参数名）。**从未在真实 run 上触发过**，报告里标「未验证」 |
+| `INEFFICIENT` | 工具调用超上限，或同一调用盲目重复。**报告里按整道题归一化** —— 见下 |
+| `NO_EXPLORATION` | 改了已有文件却从没探索过。同样**从未触发过** |
 | `CLAIMS_WITHOUT_ACTION` | 声称「测试通过」但一行代码都没执行过 |
 
 这些规则都反复收窄过 —— **误报会持续污染失败分布**，判不准的一律不做。收窄记录见 `CLAUDE.md`。
+
+`INEFFICIENT` 的阈值在温度不为 0 时卡在分布尾部（实测同题三次 11 / 21 / 32，上限 20 ——
+「多一次就翻」）。所以报告里 k≥2 时只有该题**每一次**都超限才算这道题的性质，只中一两次
+的挪到「长尾」单列、不进失败分布；k=1 无从判断，照旧逐 run 判。
 
 ## 报告长什么样
 
 ```
 Agent Evaluation Report        tasks: 12   k: 3   model: deepseek   temp: 0.1
 ────────────────────────────
-Task Success      92%  (pass@3 92%  pass^3 92%)
-Correctness       92%      Tool Usage        100%
-Completeness      92%      Error Recovery    80%
-Groundedness      n/a (needs judge)
+Task Success      97%  (pass@3 100%  pass^3 92%)
+Correctness       97%
+Completeness      97%
+Tool Usage        99%
+Error Recovery    83%  (n=12/36)
+Groundedness      92%  (n=31/36)
 
-Judge        （没判过。跑 python -m agenteval.judge <结果目录> --model <判官模型> 补上）
+Judge        model deepseek   prompt 318aef70   judged 31/36（4 条跳过（最终回答为空）；1 条判失败：roman_008/run_001，都不计入平均值）
+  Claims consistent  99%
 
 Efficiency  (仅统计 success 的 run)
-  Avg tool calls 12.7   Avg LLM calls 10.9   Avg tokens 42.3k   Avg latency 51.5s
-  First action     explore 92%   other 8%
-  Noise            tool calls ±17%   tokens ±25%   latency ±37%   （同题重复跑的组内散布）
-  Context          max usage 1%   compactions 0
+  Avg tool calls 14.6   Avg LLM calls 13.3   Avg tokens 53.3k   Avg latency 67.5s
+  First action     explore 100%
+  Noise            tool calls ±17%   tokens ±25%   latency ±37%   （同题重复跑的组内散布，中位数）
+  Context          max usage 1%   compactions 0   （没触发过压缩，这条线没信号）
+  Subagent         0/36 用了 run_subagent   （一次没用，这条线没信号）
 
 Failure Distribution  (按 run 归一化，一个 run 可命中多个标签)
-  INCOMPLETE 0.08   INEFFICIENT 0.08
+  INCOMPLETE 0.03   WRONG_TOOL 0.03
+  长尾  4 次 INEFFICIENT 只出现在题内部分 run 上 —— 上限卡在噪声里，不算这道题的性质，不计入上面的分布
+    follow_spec_003/run_002  top_words_005/run_003  trace_units_006/run_001  trace_units_006/run_003
+  未验证（从未在真实 run 上触发过，假阳性率未知，别当结论用）  NO_EXPLORATION   WRONG_ARGUMENT
+
+Truncated  4 个 run 撞到 miniCC 的循环上限（MAX_LOOP_CNT），没跑完：没有最终回答，也不判语义面
+  follow_spec_003/run_002  module_contracts_012/run_001  module_contracts_012/run_002  trace_units_006/run_003
+
+Environment  （跑完时工作区被破坏的 run —— 它们的失败标签可能来自环境，不是 agent）
+  top_words_005/run_003   跑完时少了 wordcount.py
+  成因线索：这批 27/36 个 run 的 bash 命令含 `;`（共 143 次）……（Windows 上 cmd.exe 不认 `;`）
 ```
+
+几处刻意的写法：
+
+- **`(n=12/36)`** —— `Error Recovery` 只在**出过工具错误**的 run 上有值、`Groundedness`
+  只在判过的 run 上有值。分母不等于 run 总数的维度必须印 n，否则 83% 会被读成「83% 的 run」。
+- **`Truncated`** —— agent 撞上 miniCC 的 `MAX_LOOP_CNT` 就退出来了，最终回答是空的，
+  但产物照样过验收：不单列的话它跟正常跑完的 run 在报告里长得一样。
+- **`Environment`** —— 这条 run 的 `WRONG_TOOL` 是 Windows 的 `;` 在 cmd.exe 下把工作区
+  文件删掉造成的（agent 随后只能用 `write_file` 重写）。标签没说错，但成因是环境。
+- **「这条线没信号」** —— 整批没触发的指标要说出来，不能被读成「测出来是 0」。
+- **`Judge model deepseek`** —— 上面这份是真报告，判官就是被测模型（自己判自己有偏，
+  见下面「语义面」和「现状」）。**报告不会替你检查这件事**，跑的时候自己盯住。
 
 `Noise` 那一行是判断 delta 有没有意义的唯一依据：**它比 delta 大，读出来的就是噪声**。
 算法是同题 k 次重复的组内变异系数、跨题取中位数 —— k<2 时算不出来，报告会直说。
@@ -175,6 +214,10 @@ python -m agenteval.judge runs/2026-09-28_120000/ --model kimi
 取生效的那个。单条失败只写 `judge.status = "error"`，不中断整批，确定性记录一个字段都不动。
 对比两个版本时，prompt 版本或判官模型不同就**不出语义数字** —— 那是换了一把尺子。
 
+**最终回答为空时是 `skipped`，不给分**（多半是 agent 撞了 miniCC 的循环上限，见
+`Truncated` 那段）。让模型「拿不准就给中间值」会凭空编一个数混进平均值 —— 实测 4 条
+把 `Groundedness` 从 92% 拖到 88%。解析不出来时会换句话重试一次，失败和跳过都在报告里点名。
+
 ## 报告解读（AI 分析）
 
 `--analyze kimi` 会在报告末尾追加一段 LLM 写的解读（也可单独跑
@@ -198,8 +241,15 @@ AI 分析（由 kimi 生成，prompt 6b25e64d —— 是对上面报告的一种
 
 诚实版（详细推演见 [`TODO.md`](TODO.md)）：
 
-- **正确性维度天花板低。** 12 道题里只有 1 道能稳定挂（k=3 三次全挂）。
-  如果新版本在这道题上做同样选择，报告会重新变成一条直线。
+- **正确性维度天花板低。** 12 道题里只有 1 道能稳定挂，而且**现在只剩 2/3** ——
+  temp=1 那轮它 3/3 全挂，温度降到 0.1 就只挂一次。整批唯一的区分度来源本身不稳。
+- **有 1/9 的 run 没跑完。** miniCC 的循环上限是 30 次 LLM 调用，12 题 × k=3 里有 **4 条
+  撞上**（`module_contracts_012` 两次、`follow_spec_003` 一次、`trace_units_006` 一次）。
+  它们的产物照样过验收，所以既算 `success` 又没跑完 —— 报告里单列 `Truncated` 段，
+  语义面跳过它们。**这个上限对成本高的题目偏紧，是「测 miniCC 机制」时最该盯的信号之一。**
+- **语义面那批数是自判自的。** 判官和被测模型都是 deepseek，35 个 `groundedness` 里
+  31 个落在 0.85–1.0、15 个恰好 0.9 —— 分布几乎没有分辨力。重判换判官即可
+  （`python -m agenteval.judge <目录> --model kimi`），不用重跑 agent。
 - **测量精度只够一半。** 同一版本、同一道题跑 3 次，工具调用数的**组内散布**
   （报告里的 `Noise` 行）：temp=1 时代约 ±29%，temp=0.1 下约 ±17%。逐题的效率差异
   要跟这个量级相当才看得见 —— 所以「整体变好没有」勉强答得出来，「好在哪道题」答不出来。

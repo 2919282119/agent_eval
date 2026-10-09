@@ -167,19 +167,70 @@ def test_efficiency_is_na_when_nothing_succeeded():
 
 
 def test_failure_distribution_is_normalized_by_run_count():
-    """「INEFFICIENT 0.5」= 一半的 run 命中，不是「0.5 个失败」。"""
+    """「INCOMPLETE 0.5」= 一半的 run 命中，不是「0.5 个失败」。"""
     records = [
-        make_record(failures=["INEFFICIENT", "INCOMPLETE"]),
-        make_record(failures=["INEFFICIENT"]),
+        make_record(failures=["INCOMPLETE", "WRONG_TOOL"]),
+        make_record(failures=["INCOMPLETE"]),
         make_record(),
         make_record(),
     ]
 
     failures = summarize(records)["failures"]
 
-    assert failures["INEFFICIENT"] == 0.5
-    assert failures["INCOMPLETE"] == 0.25
-    assert failures["WRONG_TOOL"] == 0.0
+    assert failures["INCOMPLETE"] == 0.5
+    assert failures["WRONG_TOOL"] == 0.25
+    assert failures["NO_EXPLORATION"] == 0.0
+
+
+def test_inefficient_is_a_property_of_the_task_not_a_single_run():
+    """上限卡在分布尾部时，「多一次就翻」的那次不该算这道题的性质。
+
+    实测 `trace_units_006` 上限 20，同题三次跑出 11 / 21 / 32 —— 按单次 run 判，
+    这 11% 就会被读成「有一成 run 效率不行」，而它跟噪声是同一件事。
+    """
+    records = [
+        make_record(run_id="run_001", failures=["INEFFICIENT"]),
+        make_record(run_id="run_002"),
+        make_record(run_id="run_003", failures=["INEFFICIENT"]),
+    ]
+
+    summary = summarize(records)
+
+    assert summary["failures"]["INEFFICIENT"] == 0.0
+    assert summary["long_tail"] == ["t1/run_001", "t1/run_003"]
+
+
+def test_inefficient_counts_when_every_run_of_the_task_is_over():
+    """整道题每次都超限是**性质**，不是长尾。"""
+    records = [
+        make_record(run_id="run_001", failures=["INEFFICIENT"]),
+        make_record(run_id="run_002", failures=["INEFFICIENT"]),
+    ]
+
+    summary = summarize(records)
+
+    assert summary["failures"]["INEFFICIENT"] == 1.0
+    assert summary["long_tail"] == []
+
+
+def test_inefficient_stays_per_run_when_k_is_one():
+    """k=1 无从判断是不是长尾，照旧逐 run 判 —— 报告已经声明那是单次观测。"""
+    summary = summarize([make_record(failures=["INEFFICIENT"])])
+
+    assert summary["failures"]["INEFFICIENT"] == 1.0
+    assert summary["long_tail"] == []
+
+
+def test_long_tail_runs_are_named_in_the_report():
+    records = [
+        make_record(run_id="run_001", failures=["INEFFICIENT"]),
+        make_record(run_id="run_002"),
+    ]
+
+    text = render(records)
+
+    assert "长尾" in text
+    assert "t1/run_001" in text
 
 
 def test_first_action_distribution():
@@ -306,7 +357,11 @@ def test_render_does_not_treat_an_unjudged_run_as_zero():
 
 
 def test_render_counts_failed_judgements_separately():
-    """判失败的不进均分，但要在报告里显形 —— 静默少一条和「没判」一样坏。"""
+    """判失败的不进均分，但要在报告里**点名** —— 静默少一条和「没判」一样坏。
+
+    之前 `judged` 数的是「有 judge 字段的记录数」，于是报告印「judged 2/2
+    （1 条判失败，未计入）」—— 自相矛盾，而且读者不知道掉的是哪条。
+    """
     records = [
         make_record(task_id="a", groundedness=0.8, judge=make_judge(value=0.8)),
         make_record(task_id="b", run_id="run_002", judge=make_judge(status="error")),
@@ -315,10 +370,27 @@ def test_render_counts_failed_judgements_separately():
     summary = summarize(records)
     text = render(records)
 
-    assert summary["judge"]["judged"] == 2
-    assert summary["judge"]["failed"] == 1
+    assert summary["judge"]["judged"] == 1
+    assert summary["judge"]["failed_runs"] == ["b/run_002"]
     assert summary["dimensions"]["groundedness"] == 0.8
-    assert "1 条判失败" in text
+    assert "judged 1/2" in text
+    assert "1 条判失败：b/run_002" in text
+
+
+def test_skipped_judgements_are_named_and_excluded():
+    """最终回答为空 → 判官跳过、不给分。编一个 0.5 混进平均值是更坏的选择。"""
+    records = [
+        make_record(task_id="a", groundedness=0.9, judge=make_judge(value=0.9)),
+        make_record(task_id="b", run_id="run_002", judge=make_judge(status="skipped")),
+    ]
+
+    summary = summarize(records)
+    text = render(records)
+
+    assert summary["judge"]["judged"] == 1
+    assert summary["judge"]["skipped"] == ["b/run_002"]
+    assert summary["dimensions"]["groundedness"] == 0.9
+    assert "1 条跳过（最终回答为空）" in text
 
 
 def test_render_notes_that_efficiency_is_conditional():
@@ -787,3 +859,106 @@ def test_load_baseline_rejects_a_json_that_is_not_a_run_record(tmp_path):
         load_baseline(tmp_path)
 
     assert "notes.json" in str(excinfo.value)
+
+
+# ---------- 数据本身的坑：没跑完的 run、被环境破坏的工作区 ----------
+
+
+def test_truncated_runs_are_named_in_the_report():
+    """撞上 miniCC 循环上限的 run 原本跟正常跑完的**长得一模一样**。
+
+    验收看的是产物，产物对了就还是 success —— 于是「agent 没来得及收尾」这件事
+    在报告里完全消失。实测 12 题 × k=3 里 4 条，而且它们的最终回答是空的、
+    还被 judge 编了个 0.5 塞进两个维度。
+    """
+    records = [make_record(task_id="a"), make_record(task_id="b")]
+    records[0]["truncated"] = True
+
+    summary = summarize(records)
+    text = render(records)
+
+    assert summary["truncated"] == ["a/run_001"]
+    assert "Truncated" in text
+    assert "a/run_001" in text
+    assert "循环上限" in text
+
+
+def test_nothing_is_said_when_no_run_was_truncated():
+    text = render([make_record()])
+
+    assert "Truncated" not in text
+
+
+def test_environment_block_names_the_run_whose_workspace_broke():
+    """工作区被破坏过 → 这条 run 的失败标签可能来自环境，必须在报告里说清。
+
+    实测 `top_words_005/run_003`：`rm … ; cat wordcount.py` 在 cmd.exe 下被拼成
+    一条 rm 命令，把工作区的 `wordcount.py` 删了，agent 只能用 write_file 重写 →
+    触发 WRONG_TOOL。标签本身没说错，但拿它当「miniCC 行为变差」就是错的。
+    """
+    records = [
+        make_record(task_id="ok"),
+        make_record(task_id="bad", run_id="run_002"),
+    ]
+    records[1]["missing_initial_files"] = ["wordcount.py"]
+    records[1]["posix_separator_calls"] = 10
+
+    summary = summarize(records)
+    text = render(records)
+
+    assert summary["environment"]["broken"] == {"bad/run_002": ["wordcount.py"]}
+    assert "Environment" in text
+    assert "bad/run_002" in text and "wordcount.py" in text
+    # `;` 是**底数**不是标志 —— 36 个真实 run 里 27 个都含它，所以要印成 aggregate
+    assert "1/2" in text
+
+
+def test_nothing_is_said_when_no_workspace_broke():
+    assert "Environment" not in render([make_record()])
+
+
+def test_dimension_denominator_is_printed_when_not_every_run_counts():
+    """分母不是 run 总数的维度要印 n。
+
+    不印的话「Error Recovery 83%」会被读成「83% 的 run 恢复得不错」—— 实际上它
+    只在**出过工具错误**的 run 上有值（实测那轮是 12/36）。分母变了读者看不出来，
+    两个版本也就没法区分「恢复变差」和「错误变多」。
+    """
+    records = [make_record(run_id=f"run_{i:03d}") for i in range(1, 4)]
+    records[0]["evaluation"]["error_recovery"] = 1.0
+    records[1]["evaluation"]["error_recovery"] = 0.0
+
+    summary = summarize(records)
+    text = render(records)
+
+    assert summary["dimension_counts"]["error_recovery"] == 2
+    assert summary["valid_runs"] == 3
+    assert "(n=2/3)" in text
+    # 每条都有值的维度不加这个尾巴 —— 印满就是噪音
+    assert "(n=3/3)" not in text
+
+
+def test_denominator_is_not_printed_when_every_run_counts():
+    records = [make_record(run_id=f"run_{i:03d}") for i in range(1, 4)]
+
+    assert "(n=" not in render(records)
+
+
+def test_zero_signal_lines_say_so():
+    """整批没触发的线要说「没信号」，不能印成「0」让人当成结论。
+
+    子 agent（36 个 run 里 0 次）和压缩（compactions 0）都是这种情况 ——
+    「Subagent 0/36」和「compactions 0」看着像测出来的结果，其实是空转。
+    """
+    text = render([make_record()])
+
+    assert "0/1 用了 run_subagent" in text
+    assert "一次没用，这条线没信号" in text
+    assert "没触发过压缩，这条线没信号" in text
+
+
+def test_subagent_line_drops_the_caveat_once_it_is_used():
+    text = render([make_record(tools_used=("read_file", "run_subagent"))])
+
+    assert "1/1 用了 run_subagent" in text
+    assert "一次没用" not in text

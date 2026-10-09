@@ -269,6 +269,9 @@ def test_main_judges_every_run_and_reports_the_tally(tmp_path, monkeypatch, caps
 def test_main_returns_1_when_every_judgement_failed(tmp_path, monkeypatch, capsys):
     """全失败多半是 key / 模型名 / 网络的问题，退出码要能反映 —— 脚本里看得见。"""
     (tmp_path / "alpha_run_001.json").write_text(json.dumps(RECORD), encoding="utf-8")
+    (tmp_path / "alpha_run_001.calls.json").write_text(
+        json.dumps(SIDECAR, ensure_ascii=False), encoding="utf-8"
+    )
     monkeypatch.setattr(judge, "load_mini_cc_env", lambda: None)
 
     def boom(state, model):
@@ -289,3 +292,101 @@ def test_main_refuses_to_pick_a_judge_model(tmp_path, capsys):
 def test_main_errors_on_an_empty_directory(tmp_path, capsys):
     assert main([str(tmp_path), "--model", "kimi"]) == 1
     assert "没有 run 记录" in capsys.readouterr().err
+
+
+# ---------- 空回答：跳过，不给分 ----------
+
+
+def test_a_run_with_no_final_answer_is_skipped_without_calling_the_model():
+    """空回答没有可判的东西 —— 那时候**不能给分**，也不该白花一次 API 钱。
+
+    之前 prompt 里那句「拿不准就给中间值」让模型给空回答打了 0.5，一个凭空编的
+    数字混进了两个维度的平均（实测 12 题 × k=3 里 4 条，把 Groundedness 从 92%
+    拖到 88%）。空回答多半是 agent 撞了 miniCC 的循环上限，压根不是「没答好」。
+    """
+    calls = []
+
+    def should_not_be_called(state, model):
+        calls.append(state)
+        return FakeResponse(GOOD_REPLY)
+
+    verdict = judge_one(
+        RECORD, {"final_answer": "   \n\n", "calls": []}, "kimi", ask=should_not_be_called
+    )
+
+    assert verdict["status"] == "skipped"
+    assert verdict["results"] is None
+    assert "最终回答为空" in verdict["reason"]
+    assert calls == []
+
+
+def test_a_missing_sidecar_is_also_skipped():
+    """sidecar 丢了 → 既没有回答也没有调用日志，同样没有可判的。"""
+    verdict = judge_one(RECORD, {}, "kimi", ask=fake_ask(GOOD_REPLY))
+
+    assert verdict["status"] == "skipped"
+
+
+def test_write_back_leaves_groundedness_null_when_skipped(tmp_path):
+    """跳过跟失败一样：`groundedness` 保持 `null`，不能变成 0 分。"""
+    path = tmp_path / "alpha_run_001.json"
+    record = json.loads(json.dumps(RECORD))
+    write_back(path, record, judge_one(RECORD, {}, "kimi", ask=fake_ask(GOOD_REPLY)))
+
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["judge"]["llm"]["status"] == "skipped"
+    assert saved["evaluation"]["groundedness"] is None
+
+
+def test_main_tallies_skipped_runs_separately(tmp_path, monkeypatch, capsys):
+    (tmp_path / "alpha_run_001.json").write_text(json.dumps(RECORD), encoding="utf-8")
+    (tmp_path / "alpha_run_001.calls.json").write_text(
+        json.dumps({**SIDECAR, "final_answer": ""}), encoding="utf-8"
+    )
+    monkeypatch.setattr(judge, "_ask", fake_ask(GOOD_REPLY))
+    monkeypatch.setattr(judge, "load_mini_cc_env", lambda: None)
+
+    # 一条都没判成 → 退出码要能反映（多半是 key / 模型名的问题）
+    assert main([str(tmp_path), "--model", "kimi"]) == 1
+    assert "跳过 1 条（最终回答为空" in capsys.readouterr().out
+
+
+# ---------- 解析失败：换句话重试 ----------
+
+
+def test_judge_retries_once_with_a_reworded_prompt():
+    """一个字符的笔误不该让整条记录掉出统计。
+
+    实测有过模型把键名打成 `groundroundedness`。重试必须**换个说法** ——
+    judge 的 temperature 是 0，原样再问一遍拿回的多半是同一个坏回答。
+    """
+    seen = []
+    replies = iter(["这不是 JSON", GOOD_REPLY])
+
+    def flaky(state, model):
+        seen.append(state)
+        return FakeResponse(next(replies))
+
+    verdict = judge_one(RECORD, SIDECAR, "kimi", ask=flaky)
+
+    assert verdict["status"] == "success"
+    assert verdict["results"]["groundedness"]["value"] == 0.9
+    assert len(seen) == 2
+    assert "repair" not in seen[0]
+    assert "repair" in seen[1]
+
+
+def test_judge_gives_up_after_attempts():
+    """重试也有上限 —— 系统性地答不对就别再烧钱了。"""
+    calls = []
+
+    def always_bad(state, model):
+        calls.append(state)
+        return FakeResponse("不是 JSON")
+
+    verdict = judge_one(RECORD, SIDECAR, "kimi", ask=always_bad)
+
+    assert verdict["status"] == "error"
+    assert verdict["results"] is None
+    assert len(calls) == judge.ATTEMPTS
+    assert f"问了 {judge.ATTEMPTS} 次" in verdict["error"]

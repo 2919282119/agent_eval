@@ -50,10 +50,16 @@ def summarize(records) -> dict:
     valid = _valid(records)
     succeeded = [r for r in valid if r["status"] == "success"]
     k = _uniform_k(records)
+    failures = {
+        tag: _tag_ratio(valid, tag) for tag in FAILURE_TAGS if tag != "INEFFICIENT"
+    }
+    # INEFFICIENT 单独算：它的判据是**整道题**而不是单次 run，见 `_inefficient`
+    failures["INEFFICIENT"], long_tail = _inefficient(valid)
 
     return {
         "tasks": len({r["task_id"] for r in records}),
         "runs": len(records),
+        "valid_runs": len(valid),
         "errors": len(records) - len(valid),
         "k": k,
         "model": _models(records),
@@ -61,6 +67,8 @@ def summarize(records) -> dict:
         # 实验条件」成为一个能被测试断言的事实，而不是一段临时比较的代码。
         "identity": _identity(records),
         "dimensions": {name: _mean_dimension(valid, name) for name, _ in DIMENSIONS},
+        # 各维度的**分母**。不等于 run 总数的那些必须在报告里印出来。
+        "dimension_counts": _dimension_counts(valid),
         # 条件效率：只在成功的 run 上统计，否则「失败得快」会被算成高效
         "efficiency": {
             "tool_calls": _mean_field(succeeded, "tool_calls"),
@@ -70,9 +78,15 @@ def summarize(records) -> dict:
         },
         "first_action": _first_action_ratios(valid),
         "context": _context_load(valid),
+        "subagent_used": _subagent_used(valid),
         "noise": _noise(records),
         "judge": _judge_summary(records),
-        "failures": {tag: _tag_ratio(valid, tag) for tag in FAILURE_TAGS},
+        # 数据本身的坑：没跑完的 run、被环境破坏过工作区的 run。跟失败标签分开印 ——
+        # 它们说的不是 agent 干得怎么样，是「上面那些数字可不可信」。
+        "truncated": _truncated_runs(valid),
+        "environment": _environment(valid),
+        "failures": failures,
+        "long_tail": long_tail,
         "pass_at_k": _pass_at_k(records),
         "pass_k": _pass_k(records),
         "per_task": _per_task(records),
@@ -110,12 +124,16 @@ def render(records, baseline=None) -> str:
     # 「这个数自己会晃多少」—— 没有它，上面的平均值和 diff 里的 delta 都会被读成结论
     lines.append(f"  {'Noise':<17}{_noise_text(summary['noise'], summary['k'])}")
     # 负载指标，不是评估信号 —— 摆在这里是为了让人一眼看出「离压缩线还有多远」，
-    # 也就解释了「压缩这条线为什么没测」（deepseek 窗口 100 万，阈值 80 万 token）
+    # 也就解释了「压缩这条线为什么没测」（deepseek 窗口 100 万，阈值 80 万 token）。
+    # compactions 是 0 时必须**说出来**：不写的话「compactions 0」看着像测出了结果，
+    # 其实是这条线整批都没触发（同 `Subagent` 那一行）。
     context = summary["context"]
+    untouched = "   （没触发过压缩，这条线没信号）" if context["compactions"] == 0 else ""
     lines.append(
         f"  Context          max usage {_pct(context['max_usage_ratio'])}   "
-        f"compactions {context['compactions']}"
+        f"compactions {context['compactions']}{untouched}"
     )
+    lines.append(f"  {'Subagent':<17}{_subagent_text(summary)}")
 
     lines.append("")
     lines.append("Failure Distribution  (按 run 归一化，一个 run 可命中多个标签)")
@@ -128,10 +146,20 @@ def render(records, baseline=None) -> str:
     else:
         lines.append("  （无）")
 
+    if summary["long_tail"]:
+        lines.append(
+            f"  长尾  {len(summary['long_tail'])} 次 INEFFICIENT 只出现在题内部分 run 上 —— "
+            "上限卡在噪声里，不算这道题的性质，不计入上面的分布"
+        )
+        lines.append("    " + "  ".join(summary["long_tail"]))
+
     lines.append(
         "  未验证（从未在真实 run 上触发过，假阳性率未知，别当结论用）  "
         + "   ".join(UNVERIFIED_RULES)
     )
+
+    lines += _truncated_text(summary["truncated"])
+    lines += _environment_text(summary["environment"])
 
     if summary["errors"]:
         lines.append("")
@@ -304,6 +332,22 @@ def _mean_dimension(records, name):
     return _mean([r["evaluation"].get(name) for r in records])
 
 
+def _dimension_counts(records) -> dict:
+    """每个维度实际有多少条 run 参与了平均。
+
+    **分母不是 run 总数的维度必须在报告里印出来。** `error_recovery` 只在出过
+    工具级错误的 run 上有值（k=3 那轮是 12/36），`groundedness` 只在判过的 run
+    上有值 —— 不印 n 的话「Error Recovery 83%」会被读成「83% 的 run 恢复得不错」，
+    两个版本对比时也分不清是「恢复变差了」还是「错误变多了」。
+    """
+    counts = {}
+    for name, _ in DIMENSIONS:
+        counts[name] = sum(
+            1 for r in records if r["evaluation"].get(name) is not None
+        )
+    return counts
+
+
 def _mean_field(records, field):
     return _mean([r.get("trajectory", {}).get(field) for r in records])
 
@@ -323,14 +367,14 @@ def _context_load(records) -> dict:
     }
 
 
-def _judge_entries(records) -> list[dict]:
-    """每条 run 的 primary judge 结果。没判过的记录直接跳过。"""
+def _judge_entries(records) -> list:
+    """每条 run 的 `(record, primary judge 结果)`。没判过的记录直接跳过。"""
     entries = []
     for record in records:
         judge = record.get("judge") or {}
         entry = judge.get(judge.get("primary") or "")
         if isinstance(entry, dict):
-            entries.append(entry)
+            entries.append((record, entry))
     return entries
 
 
@@ -339,23 +383,37 @@ def _judge_summary(records) -> dict:
 
     单独汇总而不是混进五维分：judge 是**第二评估面**，它的模型和 prompt 版本
     都得能跟着批次走 —— 不然两轮的语义分数没法比。
+
+    `judged` 只数**判成的**。之前它数的是「有 judge 字段的记录数」，于是报告印
+    「judged 36/36（1 条判失败）」—— 一个自相矛盾的说法，而且判失败的 run 还被
+    从平均里悄悄剔掉了、读者不知道是哪条。现在失败和跳过的都**点名**。
     """
     entries = _judge_entries(records)
-    succeeded = [entry for entry in entries if entry.get("status") == "success"]
+    succeeded = [(r, e) for r, e in entries if e.get("status") == "success"]
+    skipped = [(r, e) for r, e in entries if e.get("status") == "skipped"]
+    failed = [
+        (r, e) for r, e in entries if e.get("status") not in ("success", "skipped")
+    ]
     return {
-        "models": sorted({entry.get("model") for entry in entries if entry.get("model")}),
+        "models": sorted({e.get("model") for _, e in entries if e.get("model")}),
         "prompt_hashes": sorted(
-            {entry.get("prompt_hash") for entry in entries if entry.get("prompt_hash")}
+            {e.get("prompt_hash") for _, e in entries if e.get("prompt_hash")}
         ),
-        "judged": len(entries),
-        "failed": len(entries) - len(succeeded),
+        "entries": len(entries),
+        "judged": len(succeeded),
+        "skipped": _where(skipped),
+        "failed_runs": _where(failed),
         "claims_consistent": _mean(
             [
-                ((entry.get("results") or {}).get("claims_consistent") or {}).get("value")
-                for entry in succeeded
+                ((e.get("results") or {}).get("claims_consistent") or {}).get("value")
+                for _, e in succeeded
             ]
         ),
     }
+
+
+def _where(pairs) -> list:
+    return sorted(f"{r['task_id']}/{r['run_id']}" for r, _ in pairs)
 
 
 # 印在报告里的噪声指标。顺序就是显示顺序。
@@ -389,15 +447,51 @@ def _noise(records) -> dict:
     return out
 
 
-def _subagent_ratio(records) -> float | None:
-    """多少比例的 run 用了 `run_subagent`。
+def _subagent_used(records) -> int:
+    """有多少个 run 用了 `run_subagent`。
 
     子 agent 是「独有能力」里唯一能做成可复现题的那个，也是版本差异最可能露出来的地方。
+    实测 36 个 run 里 0 次 —— 0 这个数**必须在报告里说清是「没用过」而不是「0 分」**。
     """
+    return sum(1 for r in records if "run_subagent" in (r.get("tools_used") or []))
+
+
+def _subagent_ratio(records) -> float | None:
+    """用了 `run_subagent` 的 run 占比。"""
     if not records:
         return None
-    used = sum(1 for r in records if "run_subagent" in (r.get("tools_used") or []))
-    return used / len(records)
+    return _subagent_used(records) / len(records)
+
+
+def _truncated_runs(records) -> list:
+    """撞上 miniCC 循环上限、没跑完的 run。
+
+    验收看的是产物，产物对了就还是 `success` —— 于是「agent 没来得及收尾」这件事
+    原本在报告里完全看不出来（实测 12 题 × k=3 里 4 条）。
+    """
+    return [
+        f"{r['task_id']}/{r['run_id']}" for r in records if r.get("truncated")
+    ]
+
+
+def _environment(records) -> dict:
+    """环境造成的干扰 —— **不是评估信号**，是「上面那些标签可不可信」的前提。
+
+    实测 `top_words_005/run_003`：agent 写的 `rm -f /tmp/t.py …; cat wordcount.py`
+    在 Windows 上被 cmd.exe 拼成一条 `rm` 命令，把工作区里的 `wordcount.py` 一起删了；
+    agent 找不到源文件，只能用 `write_file` 重写 —— 于是触发 `WRONG_TOOL`。标签本身
+    没说错（它确实覆盖了已有文件），但成因是环境，拿它当「miniCC 行为变差」就是错的。
+    """
+    return {
+        "broken": {
+            f"{r['task_id']}/{r['run_id']}": r["missing_initial_files"]
+            for r in records
+            if r.get("missing_initial_files")
+        },
+        "separator_runs": sum(1 for r in records if r.get("posix_separator_calls")),
+        "separator_calls": sum(r.get("posix_separator_calls") or 0 for r in records),
+        "runs": len(records),
+    }
 
 
 def _first_action_ratios(records) -> dict:
@@ -431,6 +525,34 @@ def _tag_ratio(records, tag) -> float:
     if not records:
         return 0.0
     return sum(1 for r in records if tag in r["failures"]) / len(records)
+
+
+def _inefficient(records) -> tuple:
+    """`INEFFICIENT` 的比例 + 长尾的 run 名单。**按整道题判，不按单次 run。**
+
+    工具调用数的上限在温度不为 0 时就卡在分布尾部：实测 `trace_units_006` 上限 20，
+    同题三次跑出 11 / 21 / 32 —— 「多一次就翻」。按单次 run 判，等于把分布尾部读成
+    「效率不行」，而这 11% 跟噪声是同一件事。所以 k≥2 时只有该题**每一次**都命中，
+    才算这道题的性质；只中一两次的挪到「长尾」单列（看得见，但不进失败分布）。
+
+    k=1 时无从判断，照旧逐 run 判 —— 反正报告已经声明了那是单次观测。
+
+    代价：「盲目重复」那一种也被这个判据一并管住了。它在真实数据上 0 命中，不单开
+    一条路的理由是——版本对比要的恰恰是**稳定**的差异，系统性缺陷会让每一次都命中，
+    留得下来；偶发那一次本来也不该当结论。
+    """
+    counted, long_tail = [], []
+    for runs in _group_by_task(records).values():
+        over = [r for r in runs if "INEFFICIENT" in (r.get("failures") or [])]
+        if not over:
+            continue
+        if len(runs) == 1 or len(over) == len(runs):
+            counted.extend(over)
+        else:
+            long_tail.extend(over)
+    total = len(records)
+    ratio = len(counted) / total if total else 0.0
+    return ratio, sorted(f"{r['task_id']}/{r['run_id']}" for r in long_tail)
 
 
 def _pass_at_k(records) -> float | None:
@@ -489,24 +611,67 @@ def _pct_signed(value) -> str:
     return "n/a" if value is None else f"±{value:.0%}"
 
 
+def _subagent_text(summary) -> str:
+    """子 agent 使用率那一行。用了 0 次就得说出来 —— 否则「0/36」看着像测出来的结论。"""
+    text = f"{summary['subagent_used']}/{summary['valid_runs']} 用了 run_subagent"
+    if not summary["subagent_used"]:
+        text += "   （一次没用，这条线没信号）"
+    return text
+
+
+def _truncated_text(truncated) -> list:
+    """没跑完的 run。没撞上就什么都不印 —— 它不该是常态。"""
+    if not truncated:
+        return []
+    return [
+        "",
+        f"Truncated  {len(truncated)} 个 run 撞到 miniCC 的循环上限（MAX_LOOP_CNT），"
+        "没跑完：没有最终回答，也不判语义面",
+        "  " + "  ".join(truncated),
+    ]
+
+
+def _environment_text(environment) -> list:
+    """工作区被破坏的 run。没有破坏就什么都不印。"""
+    if not environment["broken"]:
+        return []
+    lines = [
+        "",
+        "Environment  （跑完时工作区被破坏的 run —— 它们的失败标签可能来自环境，不是 agent）",
+    ]
+    for where, files in sorted(environment["broken"].items()):
+        lines.append(f"  {where}   跑完时少了 " + "、".join(files))
+    lines.append(
+        f"  成因线索：这批 {environment['separator_runs']}/{environment['runs']} 个 run 的 "
+        f"bash 命令含 `;`（共 {environment['separator_calls']} 次）。Windows 上 "
+        "shell=True 走 cmd.exe、`;` 不是分隔符 —— `rm a; cat b` 会把 b 一起删掉，"
+        "工作区就少了文件"
+    )
+    return lines
+
+
 def _judge_text(summary) -> str:
     """judge 那一段。没判过就把命令写出来 —— 别让读者把 n/a 读成 0 分。"""
     judge = summary["judge"]
-    if not judge["judged"]:
+    if not judge["entries"]:
         return (
             "Judge        （没判过。跑 python -m agenteval.judge <结果目录> "
             "--model <判官模型> 补上）"
         )
 
     # 分母是**有效 run**，不是全部 —— error 的 run 不判也不进统计
-    valid_runs = summary["runs"] - summary["errors"]
     head = (
         f"Judge        model {_join(judge['models'])}   "
         f"prompt {_join(judge['prompt_hashes'])}   "
-        f"judged {judge['judged']}/{valid_runs}"
+        f"judged {judge['judged']}/{summary['valid_runs']}"
     )
-    if judge["failed"]:
-        head += f"（{judge['failed']} 条判失败，未计入）"
+    notes = []
+    if judge["skipped"]:
+        notes.append(f"{len(judge['skipped'])} 条跳过（最终回答为空）")
+    if judge["failed_runs"]:
+        notes.append(f"{len(judge['failed_runs'])} 条判失败：{', '.join(judge['failed_runs'])}")
+    if notes:
+        head += "（" + "；".join(notes) + "，都不计入平均值）"
 
     lines = [head]
     if judge["claims_consistent"] is not None:
@@ -517,16 +682,26 @@ def _judge_text(summary) -> str:
 def _dimension_cell(name, value, summary, label) -> str:
     if name == "groundedness":
         # 没跑过 judge 时保持 n/a —— **不能把「没判」显示成 0%**
-        return _pct(value) if value is not None else "n/a (needs judge)"
-    if name == "task_success":
+        cell = _pct(value) if value is not None else "n/a (needs judge)"
+    elif name == "task_success":
         cell = _pct(value)
         if summary["k"] and summary["k"] > 1:
             cell += (
                 f"  (pass@{summary['k']} {_pct(summary['pass_at_k'])}"
                 f"  pass^{summary['k']} {_pct(summary['pass_k'])})"
             )
-        return cell
-    return _pct(value)
+    else:
+        cell = _pct(value)
+    # 没有值的维度不加分母 —— 分母是给「印出来的那个数」配的，n/a 后面跟个 n 是废话
+    return cell if value is None else cell + _denominator_note(name, summary)
+
+
+def _denominator_note(name, summary) -> str:
+    """分母不是「全部有效 run」的维度，把 n 印出来。见 `_dimension_counts`。"""
+    count = summary["dimension_counts"].get(name)
+    if count is None or count == summary["valid_runs"]:
+        return ""
+    return f"  (n={count}/{summary['valid_runs']})"
 
 
 def _render_diff(current, base, baseline_runs) -> list[str]:
